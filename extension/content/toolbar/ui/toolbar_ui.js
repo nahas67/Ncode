@@ -1,0 +1,588 @@
+(function () {
+    const DOMBuilder = window.GeminiToolbarDOM;
+    const View = window.GeminiToolbarView;
+    const DragController = window.GeminiDragController;
+    const Events = window.GeminiToolbarEvents;
+    const GrammarManager = window.GeminiUIGrammar;
+    const Renderer = window.GeminiUIRenderer;
+    const ActionsDelegate = window.GeminiToolbarUIActions;
+    const CodeCopyHandler = window.GeminiCodeCopyHandler;
+    const CustomSelectionToolsUI = window.GeminiCustomSelectionToolsUI;
+    const TranslationTargetStore = window.GeminiTranslationTargetStore;
+
+    // Trailing debounce for ResizeObserver-driven window-size persistence.
+    const WINDOW_DIMENSIONS_SAVE_DELAY_MS = 300;
+
+    function getStrings() {
+        return window.GeminiToolbarStrings || {};
+    }
+
+    function getConfig() {
+        return globalThis.GeminiNexusConfig || {};
+    }
+
+    function getDefaultWebModel() {
+        return (
+            window.GeminiWebModels?.DEFAULT_WEB_MODEL ||
+            getConfig().DEFAULT_STORED_GEMINI_MODEL ||
+            ''
+        );
+    }
+
+    function getDefaultOfficialModel() {
+        return getConfig().DEFAULT_OFFICIAL_MODEL || '';
+    }
+
+    function getDefaultOpenAIModel() {
+        return getConfig().DEFAULT_OPENAI_MODEL || '';
+    }
+
+    function getDedicatedProviderConfig(provider) {
+        return getConfig().DEDICATED_API_PROVIDERS?.[provider] || null;
+    }
+
+    function createDedicatedModelOptions(settings, provider) {
+        const providerConfig = getDedicatedProviderConfig(provider);
+        const providerSettings = settings.dedicatedApiProviders?.[provider] || {};
+        const fallback = providerConfig?.defaultModel || '';
+        return createCustomModelOptions(providerSettings.model || providerConfig?.defaultModels, {
+            value: fallback,
+            label: fallback || getStrings().customModel || 'Custom Model',
+        });
+    }
+
+    function getWebThinking() {
+        return globalThis.GeminiNexusWebThinking || window.GeminiNexusWebThinking || null;
+    }
+
+    function getDefaultWebThinkingLevel() {
+        return getWebThinking()?.DEFAULT_WEB_THINKING_LEVEL || 'minimal';
+    }
+
+    function getThinkingToggleTitle(level, fastLevel) {
+        const strings = getStrings();
+        if (level === fastLevel) {
+            return fastLevel === 'minimal'
+                ? strings.toolbarThinkingMinimalFastTitle || 'Thinking: Minimal (Fast Mode)'
+                : strings.toolbarThinkingLowFastTitle || 'Thinking: Low (Fast Mode)';
+        }
+        return strings.toolbarThinkingHighTitle || 'Thinking: High (Deep Mode)';
+    }
+
+    function syncWebThinkingToggle(button, settings = {}, model) {
+        const webThinking = getWebThinking();
+        if (!button || !webThinking) return false;
+
+        const shouldShow = settings.provider === 'web' && webThinking.supportsWebThinking?.(model);
+        button.hidden = !shouldShow;
+        if (!shouldShow) {
+            button.classList.remove('is-fast');
+            button.removeAttribute('data-thinking-level');
+            button.removeAttribute('data-fast-thinking-level');
+            button.setAttribute('aria-pressed', 'false');
+            return false;
+        }
+
+        const level = webThinking.normalizeWebThinkingLevelForModel(
+            model,
+            settings.webThinkingLevel
+        );
+        const fastLevel = webThinking.getWebThinkingFastLevel(model);
+        const isFast = level === fastLevel;
+
+        button.classList.toggle('is-fast', isFast);
+        button.dataset.thinkingLevel = level;
+        button.dataset.fastThinkingLevel = fastLevel;
+        button.title = getThinkingToggleTitle(level, fastLevel);
+        button.setAttribute(
+            'aria-label',
+            getStrings().toolbarThinkingToggleAria || 'Toggle thinking level'
+        );
+        button.setAttribute('aria-pressed', isFast ? 'true' : 'false');
+        return true;
+    }
+
+    function createCustomModelOptions(rawModels, fallbackOption) {
+        const modelIds = String(rawModels || '')
+            .split(',')
+            .map((modelId) => modelId.trim())
+            .filter(Boolean);
+
+        if (modelIds.length === 0) return [fallbackOption];
+        return modelIds.map((modelId) => ({ value: modelId, label: modelId }));
+    }
+
+    class ToolbarUI {
+        constructor() {
+            this.host = null;
+            this.shadow = null;
+            this.view = null;
+            this.dragController = null;
+            this.events = null;
+            this.domBuilder = new DOMBuilder();
+            this.callbacks = {};
+            this.isBuilt = false;
+            this.pendingWindowDimensions = null;
+            this.saveDimensionsTimer = null;
+            this.provider = getConfig().DEFAULT_PROVIDER || 'web';
+            this.webThinkingLevel = getDefaultWebThinkingLevel();
+            this.translationTargetStore = new TranslationTargetStore();
+
+            this.grammarManager = null;
+            this.bridge = null;
+            this.renderer = null;
+            this.actionsDelegate = null;
+            this.codeCopyHandler = null;
+            this.customSelectionTools = null;
+        }
+
+        setCallbacks(callbacks) {
+            this.callbacks = callbacks;
+        }
+
+        _disposeRuntimeComponents() {
+            // Persist the latest debounced window size before tearing down.
+            this.flushWindowDimensions();
+            // Disconnect the previous Events instance (capture-phase keydown +
+            // ResizeObserver + submenu handlers) so rebuildForLanguageChange()
+            // does not stack a second set on document.
+            if (this.events && typeof this.events.disconnect === 'function') {
+                try {
+                    this.events.disconnect();
+                } catch (error) {
+                    console.warn('[Gemini Nexus] Failed to disconnect toolbar events:', error);
+                }
+            }
+            this.events = null;
+
+            // Tear down the previous image-preview controller's document-level
+            // pan/keydown listeners before a new WindowView recreates it.
+            const previousImagePreview = this.view?.imagePreview;
+            if (previousImagePreview && typeof previousImagePreview.destroy === 'function') {
+                try {
+                    previousImagePreview.destroy();
+                } catch (error) {
+                    console.warn('[Gemini Nexus] Failed to destroy image preview:', error);
+                }
+            }
+
+            // Destroy the previous renderer bridge so its window message
+            // listener is removed before a new one is created.
+            if (this.bridge && typeof this.bridge.destroy === 'function') {
+                try {
+                    this.bridge.destroy();
+                } catch (error) {
+                    console.warn('[Gemini Nexus] Failed to destroy renderer bridge:', error);
+                }
+            }
+            this.bridge = null;
+        }
+
+        _initializeRuntimeComponents() {
+            // Tear down the previous runtime components before recreating them.
+            // rebuildForLanguageChange() used to skip dispose and leak a
+            // capture-phase document keydown listener + ResizeObserver on every
+            // language switch. Same risk for the image-preview controller's
+            // document listeners.
+            this._disposeRuntimeComponents();
+
+            this.view = new View(this.shadow);
+            this.grammarManager = new GrammarManager(this.view);
+
+            // Always recreate the sandbox Markdown renderer bridge whenever the
+            // host exists. Language rebuild previously passed createBridge:false,
+            // which permanently destroyed the bridge after the async language
+            // preference load and left floating popup results as raw Markdown.
+            if (this.host && window.GeminiRendererBridge) {
+                this.bridge = new window.GeminiRendererBridge(this.host);
+            }
+
+            this.renderer = new Renderer(this.view, this.bridge);
+            this.actionsDelegate = new ActionsDelegate(this);
+            this.codeCopyHandler = new CodeCopyHandler();
+            this.customSelectionTools = new CustomSelectionToolsUI({
+                elements: this.view.elements,
+                tools: this.customSelectionTools?.getTools?.() || [],
+                onAction: (...args) => this.fireCallback('onAction', ...args),
+            });
+            this.dragController = new DragController(
+                this.view.elements.askWindow,
+                this.view.elements.askHeader,
+                {
+                    onSnap: (side, top) => this.view.dockWindow(side, top),
+                    onUndock: () => this.view.undockWindow(),
+                }
+            );
+
+            new DragController(this.view.elements.toolbar, this.view.elements.toolbarDrag, {
+                onDragEnd: () => {
+                    const rect = this.currentSelectionRect;
+                    if (!rect) return;
+                    const placed = this.view.elements.toolbar.getBoundingClientRect();
+                    window.GeminiViewLayout.rememberOffsetFromDrag(
+                        rect,
+                        placed.left,
+                        placed.top,
+                        placed.width
+                    );
+                },
+            });
+
+            // Double-click the drag handle to reset the toolbar to the default
+            // selection-anchored position.
+            this.view.elements.toolbarDrag?.addEventListener('dblclick', () => {
+                window.GeminiViewLayout.resetOffset();
+            });
+
+            this.events = new Events(this);
+            this.events.bind(this.view.elements, this.view.elements.askWindow);
+            this.view.setSelectedTranslationTargets(this.translationTargetStore.getTargets());
+            this.customSelectionTools.render();
+        }
+
+        build() {
+            if (this.isBuilt) return;
+
+            const { host, shadow } = this.domBuilder.create();
+            this.host = host;
+            this.shadow = shadow;
+
+            this._initializeRuntimeComponents();
+            this.isBuilt = true;
+            this.restoreTranslationTargets();
+        }
+
+        rebuildForLanguageChange() {
+            if (!this.isBuilt || !this.domBuilder || !this.domBuilder.rerender) return;
+            this.domBuilder.rerender();
+            this._initializeRuntimeComponents();
+        }
+
+        get actions() {
+            return this.actionsDelegate;
+        }
+
+        get codeCopy() {
+            return this.codeCopyHandler;
+        }
+
+        handleImageClick() {
+            this.fireCallback('onAction', 'image_analyze');
+        }
+
+        handleImageHover(isHovering) {
+            this.fireCallback('onImageBtnHover', isHovering);
+        }
+
+        handleModelChange(model) {
+            this.fireCallback('onModelChange', model);
+            this.updateWebThinkingToggle();
+        }
+
+        handleProviderChange(provider) {
+            this.provider = provider || 'web';
+            this.updateWebThinkingToggle();
+            this.fireCallback('onProviderChange', this.provider);
+        }
+
+        handleWebThinkingToggle() {
+            this.fireCallback('onWebThinkingToggle');
+        }
+
+        setCustomSelectionTools(tools) {
+            this.customSelectionTools?.setTools(tools);
+        }
+
+        setGeneratedImageWatermarkRemovalEnabled(enabled) {
+            this.renderer?.setGeneratedImageWatermarkRemovalEnabled?.(enabled !== false);
+        }
+
+        handleTranslationTargetsChange(targets) {
+            const previous = [...(this.translationTargetStore.getTargets() || [])];
+            const storedTargets = this.translationTargetStore.setTargets(targets);
+            this.view.setSelectedTranslationTargets(storedTargets);
+            // 重新选择了翻译语言时通知 controller 自动重新生成；
+            // 归一化后无变化时不触发，避免重复请求。
+            const previousSet = new Set(previous);
+            const changed =
+                previous.length !== storedTargets.length ||
+                storedTargets.some((value) => !previousSet.has(value));
+            if (changed) {
+                this.fireCallback('onTranslationTargetsChange', storedTargets);
+            }
+        }
+
+        async restoreTranslationTargets() {
+            const targets = await this.translationTargetStore.restore();
+            this.view?.setSelectedTranslationTargets(targets);
+        }
+
+        saveWindowDimensions(width, height) {
+            // ResizeObserver fires continuously while dragging: coalesce into
+            // one trailing write so storage is not hammered per frame.
+            this.pendingWindowDimensions = { width, height };
+            if (this.saveDimensionsTimer) clearTimeout(this.saveDimensionsTimer);
+            this.saveDimensionsTimer = setTimeout(() => {
+                this.saveDimensionsTimer = null;
+                this.flushWindowDimensions();
+            }, WINDOW_DIMENSIONS_SAVE_DELAY_MS);
+        }
+
+        flushWindowDimensions() {
+            if (this.saveDimensionsTimer) {
+                clearTimeout(this.saveDimensionsTimer);
+                this.saveDimensionsTimer = null;
+            }
+            const pending = this.pendingWindowDimensions;
+            this.pendingWindowDimensions = null;
+            if (!pending) return;
+            const storage = globalThis.chrome?.storage?.local;
+            if (!storage || typeof storage.set !== 'function') return;
+            storage
+                .set({ gemini_nexus_window_size: { w: pending.width, h: pending.height } })
+                .catch?.(() => {});
+        }
+
+        fireCallback(type, ...args) {
+            if (type === 'onImageBtnHover' && this.callbacks.onImageBtnHover) {
+                this.callbacks.onImageBtnHover(...args);
+            } else if (type === 'onModelChange' && this.callbacks.onModelChange) {
+                this.callbacks.onModelChange(...args);
+            } else if (type === 'onProviderChange' && this.callbacks.onProviderChange) {
+                this.callbacks.onProviderChange(...args);
+            } else if (type === 'onWebThinkingToggle' && this.callbacks.onWebThinkingToggle) {
+                this.callbacks.onWebThinkingToggle(...args);
+            } else if (type === 'onHide' && this.callbacks.onHide) {
+                this.callbacks.onHide(...args);
+            } else if (type === 'onTranslationTargetsChange') {
+                // 翻译语言切换是独立回调，不能落到 onAction（否则会被当成 action 分发）。
+                if (this.callbacks.onTranslationTargetsChange) {
+                    this.callbacks.onTranslationTargetsChange(...args);
+                }
+            } else if (this.callbacks.onAction) {
+                this.callbacks.onAction(...args);
+            }
+        }
+
+        show(rect, mousePoint) {
+            this.view.showToolbar(rect, mousePoint);
+        }
+
+        hide() {
+            this.view.hideToolbar();
+            this.fireCallback('onHide');
+        }
+
+        hideAll() {
+            this.hide();
+            this.hideAskWindow();
+            this.hideImageButton();
+        }
+
+        showImageButton(rect) {
+            this.view.showImageButton(rect);
+        }
+
+        hideImageButton() {
+            this.view.hideImageButton();
+        }
+
+        showAskWindow(
+            rect,
+            contextText,
+            title = getStrings().ask || 'Ask Gemini',
+            mousePoint = null
+        ) {
+            return this.view.showAskWindow(
+                rect,
+                contextText,
+                title,
+                () => this.dragController.reset(),
+                mousePoint
+            );
+        }
+
+        showLoading(loadingMessage) {
+            this.view.showLoading(loadingMessage);
+        }
+
+        stopLoading() {
+            this.view.updateStreamingState(false);
+            if (this.grammarManager) {
+                this.grammarManager.updateResultActions(false);
+            }
+        }
+
+        async showResult(text, title, isStreaming, images = []) {
+            if (this.renderer) {
+                await this.renderer.show(text, title, isStreaming, images);
+            }
+
+            if (this.grammarManager) {
+                this.grammarManager.updateResultActions(isStreaming);
+            }
+        }
+
+        handleGeneratedImageResult(request) {
+            if (this.renderer) {
+                this.renderer.handleGeneratedImageResult(request);
+            }
+        }
+
+        showError(text) {
+            this.view.showError(text);
+        }
+
+        hideAskWindow() {
+            this.view.hideAskWindow();
+            this.resetGrammarMode();
+        }
+
+        setInputValue(text) {
+            this.view.setInputValue(text);
+        }
+
+        setTranslationTargetMode(enabled) {
+            this.view.setTranslationTargetsVisible(enabled);
+            if (enabled)
+                this.view.setSelectedTranslationTargets(this.translationTargetStore.getTargets());
+        }
+
+        toggleTranslationTargetDropdown() {
+            this.view.toggleTranslationTargetDropdown();
+        }
+
+        closeTranslationTargetDropdown() {
+            this.view.closeTranslationTargetDropdown();
+        }
+
+        getSelectedTranslationTargets() {
+            const selected = this.view?.getSelectedTranslationTargets();
+            if (selected) {
+                this.translationTargetStore.normalizeTargets(selected);
+            }
+            return this.translationTargetStore.getTargets();
+        }
+
+        getSelectedModel() {
+            return this.view ? this.view.getSelectedModel() : getDefaultWebModel();
+        }
+
+        getProvider() {
+            return this.provider;
+        }
+
+        setSelectedModel(model) {
+            if (this.view) {
+                this.view.setSelectedModel(model);
+            }
+        }
+
+        updateModelList(settings, currentModel) {
+            const provider = settings.provider || (settings.useOfficialApi ? 'official' : 'web');
+            this.provider = provider;
+            this.webThinkingLevel =
+                getWebThinking()?.normalizeWebThinkingLevel?.(settings.webThinkingLevel) ||
+                getDefaultWebThinkingLevel();
+            this.view.setSelectedProvider(provider);
+            let options = [];
+
+            if (provider === 'official') {
+                const defaultOfficialModel = getDefaultOfficialModel();
+                options = createCustomModelOptions(settings.officialModel, {
+                    value: defaultOfficialModel,
+                    label: defaultOfficialModel,
+                });
+            } else if (provider === 'openai') {
+                options = createCustomModelOptions(settings.openaiModel, {
+                    value: getDefaultOpenAIModel(),
+                    label: getStrings().customModel || 'Custom Model',
+                });
+            } else if (getDedicatedProviderConfig(provider)) {
+                options = createDedicatedModelOptions(settings, provider);
+            } else {
+                options = window.GeminiWebModels.createOptions();
+            }
+
+            this.view.updateModelOptions(options, currentModel);
+            this.updateWebThinkingToggle();
+        }
+
+        getWebThinkingLevel() {
+            return this.webThinkingLevel || getDefaultWebThinkingLevel();
+        }
+
+        setWebThinkingLevel(level) {
+            const webThinking = getWebThinking();
+            this.webThinkingLevel =
+                webThinking?.normalizeWebThinkingLevelForModel?.(this.getSelectedModel(), level) ||
+                getDefaultWebThinkingLevel();
+            this.updateWebThinkingToggle();
+        }
+
+        updateWebThinkingToggle() {
+            syncWebThinkingToggle(
+                this.view?.elements?.askThinkingToggle,
+                {
+                    provider: this.provider,
+                    webThinkingLevel: this.getWebThinkingLevel(),
+                },
+                this.getSelectedModel()
+            );
+        }
+
+        setGrammarMode(enabled, sourceElement = null, selectionRange = null) {
+            if (this.grammarManager) {
+                this.grammarManager.setMode(enabled, sourceElement, selectionRange);
+            }
+        }
+
+        resetGrammarMode() {
+            if (this.grammarManager) {
+                this.grammarManager.reset();
+            }
+        }
+
+        showInsertReplaceButtons(show) {
+            if (this.grammarManager) {
+                this.grammarManager.toggleButtons(show);
+            }
+        }
+
+        getSourceInfo() {
+            return this.grammarManager
+                ? this.grammarManager.getSourceInfo()
+                : { element: null, range: null };
+        }
+
+        showGrammarButton(show) {
+            if (this.grammarManager) {
+                this.grammarManager.showTriggerButton(show);
+            }
+        }
+
+        showCopySelectionFeedback(success) {
+            this.view.toggleCopySelectionIcon(success);
+            setTimeout(() => {
+                this.view.toggleCopySelectionIcon(null);
+            }, 2000);
+        }
+
+        isVisible() {
+            if (!this.view) return false;
+            return this.view.isToolbarVisible() || this.view.isWindowVisible();
+        }
+
+        isWindowVisible() {
+            if (!this.view) return false;
+            return this.view.isWindowVisible();
+        }
+
+        isHost(target) {
+            if (!this.view) return false;
+            return this.view.isHost(target, this.host);
+        }
+    }
+
+    window.GeminiToolbarUI = ToolbarUI;
+})();

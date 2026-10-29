@@ -1,0 +1,499 @@
+:root {
+    --ncode-harness-top-offset: 48px;
+    --ncode-harness-browser-bar-offset: 104px;
+    --ncode-harness-gap: 6px;
+    --ncode-harness-panel-max-height: 236px;
+    /* Runtime-measured bottom edge of the bar (see NcodeHarnessBar.syncBarOffset). */
+    --ncode-harness-offset: 84px;
+}
+
+.ncode-harness-bar {
+    flex: 0 0 auto;
+    position: relative;
+    z-index: var(--z-browser-bar);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    box-sizing: border-box;
+    margin: var(--ncode-harness-top-offset) 12px 0 8px;
+    padding: 3px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: calc(var(--radius-md) + 2px);
+    background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+    box-shadow: var(--shadow-sm);
+    backdrop-filter: blur(16px);
+    color: var(--text-primary);
+    font-size: 11px;
+    line-height: 1.2;
+}
+
+body.layout-wide .ncode-harness-bar {
+    margin-left: calc(var(--sidebar-width) + var(--layout-gutter));
+}
+
+body.layout-wide.sidebar-collapsed .ncode-harness-bar {
+    margin-left: calc(var(--sidebar-collapsed-width) + var(--layout-gutter-tight));
+}
+
+body.browser-control-active .ncode-harness-bar {
+    margin-top: var(--ncode-harness-browser-bar-offset);
+}
+
+/* The harness bar sits in flow, so the chat area no longer needs the header
+ * padding used to clear the floating header row. */
+body.ncode-harness-present #chat-history {
+    padding-top: 8px;
+}
+
+/* The bar measures itself at runtime; the token default keeps the empty state
+ * clear of the bar before the first measurement. */
+body.ncode-harness-present .chat-empty {
+    top: calc(var(--ncode-harness-offset) + 4px);
+}
+
+.ncode-harness-row {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: var(--ncode-harness-gap);
+    min-width: 0;
+}
+
+.ncode-harness-cluster {
+    display: flex;
+    align-items: center;
+    gap: var(--ncode-harness-gap);
+    min-width: 0;
+}
+
+.ncode-harness-left {
+    flex: 1 1 auto;
+}
+
+.ncode-harness-right {
+    flex: 0 0 auto;
+    margin-left: auto;
+    justify-content: flex-end;
+}
+
+.ncode-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-pill);
+    background: var(--bg-setting-panel);
+    color: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition:
+        color var(--duration-normal) var(--ease-standard),
+        background-color var(--duration-normal) var(--ease-standard),
+        border-color var(--duration-normal) var(--ease-standard);
+}
+
+.ncode-status-dot {
+    width: 6px;
+    height: 6px;
+    flex: 0 0 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.ncode-status-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ncode-status-pill.is-connected {
+    color: var(--success);
+    background: var(--success-soft);
+    border-color: var(--success-border);
+}
+
+.ncode-status-pill.is-disconnected {
+    color: var(--danger);
+    background: var(--danger-soft);
+    border-color: var(--danger-border);
+}
+
+.ncode-status-pill.is-unknown {
+    color: var(--text-tertiary);
+}
+
+.ncode-toggle-btn,
+.ncode-goal-toggle,
+.ncode-compact-btn,
+.ncode-goal-reset {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 9px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    transition:
+        color var(--duration-fast) var(--ease-standard),
+        background-color var(--duration-fast) var(--ease-standard),
+        border-color var(--duration-fast) var(--ease-standard);
+}
+
+.ncode-toggle-btn svg,
+.ncode-goal-toggle svg,
+.ncode-compact-btn svg {
+    width: 12px;
+    height: 12px;
+    flex: 0 0 12px;
+}
+
+.ncode-toggle-btn:hover,
+.ncode-goal-toggle:hover,
+.ncode-compact-btn:hover:not(:disabled),
+.ncode-goal-reset:hover {
+    background: var(--btn-hover);
+    color: var(--text-primary);
+}
+
+.ncode-harness-bar button:focus-visible {
+    outline: none;
+    box-shadow:
+        0 0 0 2px var(--bg-body),
+        0 0 0 4px var(--border-focus);
+}
+
+.ncode-toggle-btn.is-on {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--primary) 42%, transparent);
+}
+
+.ncode-preamble-ticker {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1 1 160px;
+    min-width: 0;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-setting-panel);
+    overflow: hidden;
+}
+
+.ncode-preamble-label {
+    flex: 0 0 auto;
+    color: var(--text-tertiary);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.ncode-preamble-text {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 11px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 16px), transparent 100%);
+}
+
+.ncode-preamble-ticker.is-idle .ncode-preamble-text {
+    color: var(--text-tertiary);
+    font-style: italic;
+    -webkit-mask-image: none;
+    mask-image: none;
+}
+
+@keyframes ncode-preamble-flash {
+    from {
+        color: var(--primary);
+    }
+    to {
+        color: var(--text-secondary);
+    }
+}
+
+.ncode-preamble-ticker.is-updated .ncode-preamble-text {
+    animation: ncode-preamble-flash 1.2s var(--ease-standard);
+}
+
+.ncode-compact-btn.is-busy {
+    color: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 42%, transparent);
+}
+
+.ncode-compact-btn.is-error {
+    color: var(--danger);
+    border-color: var(--danger-border);
+}
+
+.ncode-compact-btn:disabled {
+    cursor: progress;
+    opacity: 0.78;
+}
+
+.ncode-compact-btn.is-busy svg {
+    animation: ncode-harness-spin 1s linear infinite;
+}
+
+@keyframes ncode-harness-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.ncode-goal-toggle {
+    padding-right: 7px;
+}
+
+.ncode-goal-toggle svg {
+    transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.ncode-goal-toggle[aria-expanded='true'] svg {
+    transform: rotate(180deg);
+}
+
+.ncode-compaction-status {
+    min-width: 0;
+    max-width: 180px;
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ncode-compaction-status.is-busy {
+    color: var(--primary);
+}
+
+.ncode-compaction-status.is-error {
+    color: var(--danger);
+}
+
+.ncode-compaction-status.is-warning {
+    color: var(--warning);
+}
+
+.ncode-goal-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: var(--ncode-harness-panel-max-height);
+    padding: 6px 8px 8px;
+    border-top: 1px solid var(--border-color);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.ncode-goal-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ncode-goal-panel-title {
+    color: var(--text-tertiary);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.ncode-goal-meta {
+    min-width: 0;
+    margin-left: auto;
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ncode-goal-reset {
+    height: 20px;
+    padding: 0 8px;
+    font-size: 9px;
+}
+
+.ncode-goal-root {
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.ncode-goal-root:empty {
+    display: none;
+}
+
+.ncode-goal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ncode-goal-list:empty {
+    display: none;
+}
+
+.ncode-goal-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 3px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-setting-panel);
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.ncode-goal-row.is-running {
+    box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.ncode-goal-role {
+    flex: 0 0 auto;
+    padding: 1px 5px;
+    border-radius: var(--radius-pill);
+    background: var(--brand-soft);
+    color: var(--brand);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.ncode-goal-title {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ncode-goal-status-icon {
+    flex: 0 0 auto;
+    width: 12px;
+    color: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: 700;
+    text-align: center;
+}
+
+.ncode-goal-row.is-done .ncode-goal-title {
+    color: var(--text-tertiary);
+    text-decoration: line-through;
+}
+
+.ncode-goal-row.is-done .ncode-goal-status-icon {
+    color: var(--success);
+}
+
+.ncode-goal-row.is-running .ncode-goal-status-icon {
+    color: var(--primary);
+}
+
+.ncode-goal-row.is-failed .ncode-goal-status-icon {
+    color: var(--danger);
+}
+
+.ncode-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+    .ncode-harness-row {
+        flex-wrap: wrap;
+        row-gap: 4px;
+    }
+
+    /* Flatten the clusters so the compact controls can share wrapped rows. */
+    .ncode-harness-left,
+    .ncode-harness-right {
+        display: contents;
+    }
+
+    .ncode-status-pill {
+        order: 1;
+        max-width: calc(50% - 3px);
+    }
+
+    .ncode-status-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .ncode-toggle-btn {
+        order: 2;
+    }
+
+    .ncode-goal-toggle {
+        order: 3;
+        margin-left: auto;
+    }
+
+    .ncode-compact-btn {
+        order: 4;
+    }
+
+    .ncode-compaction-status {
+        order: 5;
+    }
+
+    .ncode-preamble-ticker {
+        order: 6;
+        flex: 1 1 100%;
+    }
+}
+
+@media (max-width: 600px) {
+    /* Below this width the header.css browser-control bar starts at 56px. */
+    body.browser-control-active .ncode-harness-bar {
+        margin-top: 116px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ncode-preamble-ticker.is-updated .ncode-preamble-text,
+    .ncode-compact-btn.is-busy svg {
+        animation: none;
+    }
+
+    .ncode-goal-toggle svg {
+        transition: none;
+    }
+}

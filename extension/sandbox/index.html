@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <title>Gemini Nexus UI</title>
+
+        <!-- CRITICAL: Apply Theme & Lang Immediately from URL before Rendering -->
+        <script>
+            (function () {
+                try {
+                    const params = new URLSearchParams(window.location.search);
+                    const theme = params.get('theme');
+                    const lang = params.get('lang');
+
+                    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    if (theme === 'dark' || (theme === 'system' && systemDark)) {
+                        document.documentElement.setAttribute('data-theme', 'dark');
+                    }
+
+                    if (lang && lang !== 'system') {
+                        document.documentElement.lang = lang;
+                    } else if (!lang || lang === 'system') {
+                        if (navigator.language.startsWith('zh')) {
+                            document.documentElement.lang = 'zh';
+                        }
+                    }
+                } catch {}
+            })();
+        </script>
+
+        <!-- Local CSS (Parallel Loading) -->
+        <!-- Sandbox page styles -->
+        <link rel="stylesheet" href="../css/base.css" />
+        <link rel="stylesheet" href="../css/components.css" />
+        <link rel="stylesheet" href="../css/image_viewer.css" />
+        <link rel="stylesheet" href="../css/settings.css" />
+        <link rel="stylesheet" href="../css/settings_controls.css" />
+        <link rel="stylesheet" href="../css/settings_forms.css" />
+        <link rel="stylesheet" href="../css/settings_mcp.css" />
+        <link rel="stylesheet" href="../css/settings_custom_tools.css" />
+        <link rel="stylesheet" href="../css/header.css" />
+        <link rel="stylesheet" href="../css/sidebar.css" />
+        <link rel="stylesheet" href="../css/chat.css" />
+        <link rel="stylesheet" href="../css/chat_tools.css" />
+        <link rel="stylesheet" href="../css/chat_references.css" />
+        <link rel="stylesheet" href="../css/chat_media.css" />
+        <link rel="stylesheet" href="../css/chat_markdown.css" />
+        <link rel="stylesheet" href="../css/ncode_harness.css" />
+        <link rel="stylesheet" href="../css/input.css" />
+        <link rel="stylesheet" href="../css/input_attachments.css" />
+        <link rel="stylesheet" href="../css/input_states.css" />
+
+        <!-- Dependencies are now Lazy Loaded in sandbox/index.js to speed up First Paint -->
+    </head>
+    <body>
+        <div id="app"></div>
+        <script src="./index.js" type="module"></script>
+    </body>
+</html>

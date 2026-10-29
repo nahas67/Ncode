@@ -1,0 +1,72 @@
+import { describe, expect, it } from 'vitest';
+import {
+    DEFAULT_WEB_THINKING_LEVEL,
+    WEB_NATIVE_THINKING_LEVELS,
+    getNextWebThinkingLevel,
+    getWebNativeThinkingLevel,
+    getWebThinkingFastLevel,
+    normalizeWebThinkingLevel,
+    normalizeWebThinkingLevelForModel,
+    supportsWebThinking,
+} from './web_thinking.js';
+
+describe('web thinking helpers', () => {
+    it('defaults Gemini Web thinking to fast mode and normalizes invalid levels', () => {
+        expect(DEFAULT_WEB_THINKING_LEVEL).toBe('minimal');
+        expect(normalizeWebThinkingLevel('LOW')).toBe('low');
+        expect(normalizeWebThinkingLevel('unknown')).toBe('minimal');
+    });
+
+    it('uses minimal as the fast toggle for current Web models and low for fallback', () => {
+        expect(getWebThinkingFastLevel('56fdd199312815e2')).toBe('minimal');
+        expect(getWebThinkingFastLevel('cf41b0e0dd7d53e5')).toBe('minimal');
+        expect(getWebThinkingFastLevel('95a4c0abcba24364')).toBe('minimal');
+        expect(getWebThinkingFastLevel('unknown-model')).toBe('low');
+        expect(normalizeWebThinkingLevelForModel('unknown-model', 'minimal')).toBe('low');
+    });
+
+    it('toggles between model-specific fast mode and high mode', () => {
+        expect(getNextWebThinkingLevel('56fdd199312815e2', 'high')).toBe('minimal');
+        expect(getNextWebThinkingLevel('56fdd199312815e2', 'minimal')).toBe('high');
+        expect(getNextWebThinkingLevel('cf41b0e0dd7d53e5', 'high')).toBe('minimal');
+        expect(getNextWebThinkingLevel('95a4c0abcba24364', 'high')).toBe('minimal');
+        expect(getNextWebThinkingLevel('95a4c0abcba24364', 'minimal')).toBe('high');
+        expect(getNextWebThinkingLevel('unknown-model', 'high')).toBe('low');
+        expect(getNextWebThinkingLevel('unknown-model', 'low')).toBe('high');
+    });
+
+    it('maps Nexus Web thinking levels to Gemini Web native levels', () => {
+        expect(getWebNativeThinkingLevel('56fdd199312815e2', 'minimal')).toBe(
+            WEB_NATIVE_THINKING_LEVELS.STANDARD
+        );
+        expect(getWebNativeThinkingLevel('cf41b0e0dd7d53e5', 'minimal')).toBe(
+            WEB_NATIVE_THINKING_LEVELS.STANDARD
+        );
+        expect(getWebNativeThinkingLevel('95a4c0abcba24364', 'minimal')).toBe(
+            WEB_NATIVE_THINKING_LEVELS.STANDARD
+        );
+        expect(getWebNativeThinkingLevel('56fdd199312815e2', 'medium')).toBe(
+            WEB_NATIVE_THINKING_LEVELS.EXTENDED
+        );
+        expect(getWebNativeThinkingLevel('56fdd199312815e2', 'high')).toBe(
+            WEB_NATIVE_THINKING_LEVELS.EXTENDED
+        );
+        expect(getWebNativeThinkingLevel('95a4c0abcba24364', 'high')).toBe(
+            WEB_NATIVE_THINKING_LEVELS.EXTENDED
+        );
+    });
+
+    it('only supports known Gemini Web reverse models', () => {
+        expect(supportsWebThinking('gemini-4-argon')).toBe(true);
+        expect(supportsWebThinking('gemini-4')).toBe(true);
+        expect(supportsWebThinking('gemini-3.8-flash')).toBe(true);
+        expect(supportsWebThinking('gemini-3.7-flash')).toBe(true);
+        expect(supportsWebThinking('gemini-3.5-flash-lite')).toBe(true);
+        expect(supportsWebThinking('gemini-3.1-pro')).toBe(false);
+        expect(supportsWebThinking('e6fa609c3fa255c0')).toBe(false);
+        expect(supportsWebThinking('gemini-3.6-flash')).toBe(false);
+        expect(supportsWebThinking('gemini-3-flash-thinking')).toBe(false);
+        expect(supportsWebThinking('gemini-3-flash')).toBe(false);
+        expect(supportsWebThinking('gpt-5')).toBe(false);
+    });
+});

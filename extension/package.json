@@ -1,0 +1,40 @@
+{
+    "name": "ncode-extension",
+    "private": true,
+    "version": "1.0.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "lint:unused": "knip --no-progress",
+        "check:gemini-web": "node scripts/gemini-web-drift-check.mjs",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "check": "npm run format:check && npm run build && npm exec tsc -- --noEmit && npm run lint:unused && npm run test",
+        "package:extension": "npm run build && node scripts/package-extension.mjs",
+        "package:local": "npm run package:extension && node scripts/package-local.mjs",
+        "sync:local": "node scripts/package-local.mjs",
+        "native-logger:install": "node scripts/install-native-logger.mjs",
+        "native-logger:uninstall": "node scripts/install-native-logger.mjs --uninstall",
+        "publish:chrome-webstore": "node scripts/chrome-webstore-publish.mjs",
+        "preview": "vite preview"
+    },
+    "devDependencies": {
+        "@types/node": "^22.14.0",
+        "jsdom": "^27.0.1",
+        "knip": "^6.13.1",
+        "prettier": "^3.8.3",
+        "typescript": "~5.8.2",
+        "vite": "^6.2.0",
+        "vitest": "^3.2.4"
+    },
+    "dependencies": {
+        "@viz-js/viz": "^3.25.0",
+        "highlight.js": "^11.11.1",
+        "katex": "^0.16.45",
+        "marked": "^18.0.3",
+        "mermaid": "^10.9.6"
+    }
+}

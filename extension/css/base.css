@@ -1,0 +1,250 @@
+:root {
+    /* Radius scale (sm / md / lg / xl / bubble / pill) */
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 20px;
+    --radius-xl: 26px;
+    --radius-bubble: 16px;
+    --radius-pill: 999px;
+
+    /* Layout (sidepanel / composer) */
+    --sidebar-width: 16.2rem;
+    --sidebar-collapsed-width: 52.2px;
+    --composer-max-width: 40.32rem;
+    --layout-gutter: 12px;
+    --layout-gutter-tight: 8px;
+    --header-offset: 80px;
+    --browser-control-header-offset: 126px;
+
+    /* Z-layers (global stack, low → high; local component layering stays inline) */
+    --z-browser-bar: 9;
+    --z-header: 10;
+    --z-header-flyout: 80;
+    --z-composer: 100;
+    --z-sidebar-overlay: 190;
+    --z-sidebar: 200;
+    --z-composer-menu: 1000;
+    --z-image-viewer: 2000;
+    --z-image-viewer-toolbar: 2001;
+    --z-settings-modal: 2100;
+    --z-settings-popover: 2200;
+    --z-collapsed-popover: 9999;
+
+    /* Motion */
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+    --ease-emphasized: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --duration-fast: 0.15s;
+    --duration-normal: 0.2s;
+
+    /* Elevation */
+    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.08);
+    --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.12);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.14);
+
+    /* Semantic */
+    --danger: #c62828;
+    --danger-soft: color-mix(in srgb, var(--danger) 12%, transparent);
+    --danger-border: color-mix(in srgb, var(--danger) 28%, transparent);
+    --success: #047857;
+    --success-soft: color-mix(in srgb, var(--success) 12%, transparent);
+    --success-border: color-mix(in srgb, var(--success) 42%, transparent);
+    --warning: #b45309;
+    --warning-soft: color-mix(in srgb, var(--warning) 12%, transparent);
+    --warning-border: color-mix(in srgb, var(--warning) 42%, transparent);
+    /* Starred / favorite accent (only gold in the palette — keep tokenized) */
+    --accent-gold: #f59e0b;
+
+    /* Light Theme (Default) */
+    --bg-body: #ffffff;
+    --bg-sidebar: #f0f4f9;
+    --bg-modal: #ffffff;
+    --bg-elevated: #ffffff;
+    --bg-input: #f0f4f9;
+    --bg-input-focus: #ffffff;
+    --bg-setting-panel: rgba(0, 0, 0, 0.03);
+    --bg-overlay: rgba(0, 0, 0, 0.4);
+
+    --text-primary: #1f1f1f;
+    --text-secondary: #444746;
+    --text-tertiary: #5e5e5e;
+
+    --border-color: #e1e3e1;
+    --border-focus: #d3e3fd;
+
+    /* User Message Bubble */
+    --bg-user-msg: #e8eef8;
+    --text-user-msg: #1f1f1f;
+
+    /* Interactive Elements */
+    --btn-hover: #e0e4e9;
+    --btn-active-bg: #dce8ff;
+
+    /* Primary actions (send, links) — Material blue for clarity */
+    --primary: #0b57d0;
+    --primary-hover: #0842a0;
+    --on-primary: #ffffff;
+
+    /* Brand spark (empty state, soft accents) — Gemini-leaning violet */
+    --brand: #6c5ce7;
+    --brand-soft: color-mix(in srgb, var(--brand) 14%, transparent);
+    --brand-glow: color-mix(in srgb, var(--brand) 22%, transparent);
+
+    /* Toolbar / Tools */
+    --tool-bg: rgba(255, 255, 255, 0.8);
+
+    /* Icon Buttons (Floating/Header) */
+    --icon-btn-bg: rgba(255, 255, 255, 0.85);
+    --icon-btn-hover: rgba(255, 255, 255, 0.95);
+    --icon-btn-border: rgba(255, 255, 255, 0.5);
+
+    /* Code Blocks */
+    --code-bg: #1e1e1e;
+    --code-text: #e3e3e3;
+    --inline-code-bg: #f0f4f9;
+    /* Code header label/copy button: ≥4.5:1 on the tinted light header strip. */
+    --code-header-text: #444746;
+
+    /* Inputs */
+    /* Placeholder meets AA (≥4.5:1) on --bg-input and --bg-input-focus. */
+    --input-placeholder: #6b6f73;
+
+    /* Scrollbars */
+    --scrollbar-thumb: rgba(0, 0, 0, 0.16);
+    --scrollbar-thumb-hover: rgba(0, 0, 0, 0.28);
+
+    /* Footer Gradient */
+    --footer-gradient-start: #ffffff;
+}
+
+[data-theme='dark'] {
+    /* Dark Theme */
+    --bg-body: #131314;
+    --bg-sidebar: #1e1f20;
+    --bg-modal: #2d2e2f;
+    --bg-elevated: #2a2b2c;
+    --bg-input: #1e1f20;
+    --bg-input-focus: #2d2e2f;
+    --bg-setting-panel: rgba(255, 255, 255, 0.05);
+    --bg-overlay: rgba(0, 0, 0, 0.6);
+
+    --text-primary: #e3e3e3;
+    --text-secondary: #c4c7c5;
+    --text-tertiary: #8e918f;
+
+    --border-color: #3c4043;
+    --border-focus: #5e5e5e;
+
+    /* Semantic — calibrated for dark surfaces (≥4.5:1 on dark backgrounds) */
+    --danger: #f2b8b5;
+    --success: #81c995;
+    --warning: #fdd663;
+
+    /* User Message Bubble — slightly lifted from body */
+    --bg-user-msg: #2a2d32;
+    --text-user-msg: #e3e3e3;
+
+    --btn-hover: #333537;
+
+    /* Cool blue with a hint of brand violet */
+    --primary: #6b9ef5;
+    --primary-hover: #8bb4f8;
+    --on-primary: #0b1220;
+    /* Active toggles track primary (not brand violet) for consistent on-state */
+    --btn-active-bg: color-mix(in srgb, var(--primary) 22%, #1e1f20);
+
+    --brand: #a78bfa;
+    --brand-soft: color-mix(in srgb, var(--brand) 18%, transparent);
+    --brand-glow: color-mix(in srgb, var(--brand) 26%, transparent);
+
+    --tool-bg: rgba(45, 46, 47, 0.8);
+
+    /* Scrollbars */
+    --scrollbar-thumb: rgba(255, 255, 255, 0.18);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+
+    --icon-btn-bg: rgba(45, 46, 47, 0.85);
+    --icon-btn-hover: rgba(60, 61, 63, 0.95);
+    --icon-btn-border: rgba(255, 255, 255, 0.1);
+
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.28);
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.36);
+    --shadow-lg: 0 14px 36px rgba(0, 0, 0, 0.42);
+
+    /* Code */
+    --code-bg: #28292a;
+    --inline-code-bg: #2d2e2f;
+    /* ≥4.5:1 on the veiled dark header (3% white over this --code-bg). */
+    --code-header-text: #9aa0a6;
+
+    /* Distinct from the light value: AA-checked against the dark surfaces. */
+    --input-placeholder: #969996;
+
+    --footer-gradient-start: #131314;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family:
+        system-ui,
+        -apple-system,
+        'Segoe UI',
+        'PingFang SC',
+        'Hiragino Sans GB',
+        'Noto Sans SC',
+        'Microsoft YaHei',
+        Roboto,
+        'Helvetica Neue',
+        Arial,
+        sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--bg-body);
+    color: var(--text-primary);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    transition:
+        background-color var(--duration-normal) var(--ease-standard),
+        color var(--duration-normal) var(--ease-standard);
+}
+
+#app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+/* Unified app scrollbars (chat / settings / sidebar history) */
+#chat-history,
+.settings-body,
+.history-list {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+#chat-history::-webkit-scrollbar,
+.settings-body::-webkit-scrollbar,
+.history-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+#chat-history::-webkit-scrollbar-thumb,
+.settings-body::-webkit-scrollbar-thumb,
+.history-list::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: var(--radius-pill);
+}
+
+#chat-history::-webkit-scrollbar-thumb:hover,
+.settings-body::-webkit-scrollbar-thumb:hover,
+.history-list::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+}

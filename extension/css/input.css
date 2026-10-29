@@ -1,0 +1,520 @@
+.footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 0 20px calc(env(safe-area-inset-bottom, 0px) + 16px);
+    background: linear-gradient(to top, var(--footer-gradient-start) 72%, transparent);
+    z-index: var(--z-composer);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none;
+    box-sizing: border-box;
+}
+
+body.layout-wide .footer {
+    padding-left: calc(var(--sidebar-width) + var(--layout-gutter));
+}
+
+body.layout-wide.sidebar-collapsed .footer {
+    padding-left: calc(var(--sidebar-collapsed-width) + var(--layout-gutter-tight));
+}
+
+body.layout-wide .input-wrapper {
+    margin: 0 auto;
+}
+
+#status {
+    width: min(100%, var(--composer-max-width));
+    font-size: 12px;
+    color: var(--text-tertiary);
+    text-align: center;
+    margin-bottom: 8px;
+    min-height: 18px;
+    font-weight: 500;
+    transition: color var(--duration-normal) var(--ease-standard);
+}
+
+.input-wrapper {
+    width: 100%;
+    max-width: var(--composer-max-width);
+    pointer-events: auto;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 12px 8px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-md);
+    transition:
+        border-color var(--duration-normal) var(--ease-standard),
+        background-color var(--duration-normal) var(--ease-standard),
+        box-shadow var(--duration-normal) var(--ease-standard);
+}
+
+.input-wrapper:focus-within {
+    background: var(--bg-input-focus);
+    border-color: var(--border-focus);
+    box-shadow: var(--shadow-lg);
+}
+
+.input-wrapper.dragging {
+    background-color: var(--btn-active-bg);
+    border-color: var(--primary);
+}
+
+.composer-textarea-shell {
+    display: flex;
+    width: 100%;
+    min-height: 32px;
+    cursor: text;
+}
+
+#prompt {
+    width: 100%;
+    min-height: 26px;
+    max-height: 200px;
+    border: none;
+    outline: none;
+    resize: none;
+    padding: 2px 4px 0;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 16px;
+    line-height: 1.5;
+}
+
+#prompt::placeholder {
+    color: var(--input-placeholder);
+}
+
+.composer-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+    width: 100%;
+}
+
+.composer-actions-left,
+.composer-actions-right {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.composer-actions-left {
+    flex: 1;
+    gap: 6px;
+}
+
+.composer-actions-right {
+    flex: 0 0 auto;
+}
+
+.tools-container {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+    gap: 2px;
+    pointer-events: auto;
+}
+
+/* Mode toggles stay on the main bar — clear hierarchy, no horizontal scroll. */
+.tools-primary {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+.tool-btn {
+    height: 32px;
+    padding: 0 10px;
+    border: none;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    transition:
+        background-color var(--duration-fast) var(--ease-standard),
+        color var(--duration-fast) var(--ease-standard),
+        box-shadow var(--duration-fast) var(--ease-standard);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 2;
+}
+
+.tool-btn:hover {
+    background: var(--btn-hover);
+    color: var(--text-primary);
+}
+
+.tool-btn:focus-visible {
+    outline: none;
+    background: var(--btn-hover);
+    color: var(--text-primary);
+    box-shadow:
+        0 0 0 2px var(--bg-input),
+        0 0 0 4px var(--border-focus);
+}
+
+.input-wrapper:focus-within .tool-btn:focus-visible {
+    box-shadow:
+        0 0 0 2px var(--bg-input-focus),
+        0 0 0 4px var(--border-focus);
+}
+
+/* Unified on/off language for mode toggles */
+.tool-btn.tool-toggle.active,
+.tool-btn.tool-toggle[aria-pressed='true'] {
+    background: var(--btn-active-bg);
+    color: var(--primary);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 32%, transparent);
+}
+
+.tool-btn.tool-toggle.active:focus-visible,
+.tool-btn.tool-toggle[aria-pressed='true']:focus-visible {
+    box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--primary) 32%, transparent),
+        0 0 0 2px var(--bg-input),
+        0 0 0 4px var(--border-focus);
+}
+
+.input-wrapper:focus-within .tool-btn.tool-toggle.active:focus-visible,
+.input-wrapper:focus-within .tool-btn.tool-toggle[aria-pressed='true']:focus-visible {
+    box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--primary) 32%, transparent),
+        0 0 0 2px var(--bg-input-focus),
+        0 0 0 4px var(--border-focus);
+}
+
+.tool-btn.tool-toggle.active::after,
+.tool-btn.tool-toggle[aria-pressed='true']::after {
+    content: '';
+    position: absolute;
+    top: 5px;
+    right: 6px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--primary);
+    box-shadow: 0 0 0 2px var(--bg-input);
+}
+
+.input-wrapper:focus-within .tool-btn.tool-toggle.active::after,
+.input-wrapper:focus-within .tool-btn.tool-toggle[aria-pressed='true']::after {
+    box-shadow: 0 0 0 2px var(--bg-input-focus);
+}
+
+/* Quote (and similar) hide when no webpage is bound. */
+body:not(.has-page-context) .context-aware {
+    display: none !important;
+}
+
+#page-context-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+#page-context-btn:disabled:hover {
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.tool-btn svg,
+.tool-btn .tool-icon-img {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+}
+
+/*
+ * Same PNG as the on-page AI cursor, masked so fill tracks currentColor
+ * like neighboring SVG tool icons (hover / active / theme free).
+ * Used by the input Control toggle and chat browser-control action cards.
+ */
+.tool-btn .tool-icon-browser-control,
+.tool-disclosure-icon .tool-icon-browser-control {
+    display: block;
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    background-color: currentColor;
+    -webkit-mask-image: url('../assets/cursors/cursor-chat.png');
+    mask-image: url('../assets/cursors/cursor-chat.png');
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+}
+
+.tools-more-dropdown,
+.capture-dropdown {
+    position: relative;
+    flex-shrink: 0;
+}
+
+#capture-menu-btn svg:last-of-type {
+    width: 12px;
+    height: 12px;
+    opacity: 0.7;
+    transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+#capture-menu-btn[aria-expanded='true'] svg:last-of-type {
+    transform: rotate(180deg);
+}
+
+.tools-menu {
+    position: fixed;
+    bottom: auto;
+    left: auto;
+    min-width: 200px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    padding: 4px;
+    z-index: var(--z-composer-menu);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tools-menu[hidden] {
+    display: none;
+}
+
+.tools-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: none;
+    border-radius: calc(var(--radius-sm) - 2px);
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 13px;
+    text-align: left;
+    width: 100%;
+    font: inherit;
+}
+
+.tools-menu-item:hover,
+.tools-menu-item:focus-visible {
+    background: var(--btn-hover);
+    color: var(--primary);
+    outline: none;
+}
+
+.tools-menu-item svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+}
+
+.tools-menu-item:hover svg {
+    color: var(--primary);
+}
+
+#upload-btn,
+#new-chat-composer-btn,
+#send {
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    transition:
+        background-color var(--duration-fast) var(--ease-standard),
+        color var(--duration-fast) var(--ease-standard),
+        transform var(--duration-fast) var(--ease-emphasized),
+        box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+#upload-btn,
+#new-chat-composer-btn {
+    color: var(--text-secondary);
+    background: transparent;
+    outline: none;
+}
+
+#upload-btn:hover,
+#new-chat-composer-btn:hover {
+    color: var(--text-primary);
+    background: var(--btn-hover);
+}
+
+#upload-btn:focus-visible,
+#new-chat-composer-btn:focus-visible {
+    color: var(--text-primary);
+    background: var(--btn-hover);
+    box-shadow:
+        0 0 0 2px var(--bg-input),
+        0 0 0 4px var(--border-focus);
+}
+
+.input-wrapper:focus-within #upload-btn:focus-visible,
+.input-wrapper:focus-within #new-chat-composer-btn:focus-visible {
+    box-shadow:
+        0 0 0 2px var(--bg-input-focus),
+        0 0 0 4px var(--border-focus);
+}
+
+#new-chat-composer-btn svg {
+    width: 20px;
+    height: 20px;
+}
+
+#send {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: 9999px;
+    display: grid;
+    place-items: center;
+    background: #3964fe;
+    color: #ffffff;
+    box-shadow: none;
+    transform: translateY(-2px);
+    transition:
+        background-color 100ms ease,
+        opacity 100ms ease;
+    line-height: 1;
+}
+
+[data-theme='dark'] #send {
+    background: #679efe;
+    color: #ffffff;
+}
+
+#send:hover {
+    background: #3358e0;
+    box-shadow: none;
+    transform: translateY(-2px);
+}
+
+[data-theme='dark'] #send:hover {
+    background: #5a8de0;
+}
+
+#send:active {
+    transform: translateY(-2px);
+}
+
+#send:focus-visible {
+    outline: none;
+    box-shadow:
+        0 0 0 2px var(--bg-input),
+        0 0 0 4px var(--border-focus);
+}
+
+#send:disabled,
+#send.is-empty:not(.generating) {
+    background: #3964fe;
+    color: #ffffff;
+    opacity: 0.4;
+    cursor: default;
+    box-shadow: none;
+    transform: translateY(-2px);
+}
+
+[data-theme='dark'] #send:disabled,
+[data-theme='dark'] #send.is-empty:not(.generating) {
+    background: #679efe;
+    color: #ffffff;
+}
+
+#send.is-empty:not(.generating):hover {
+    background: #3964fe;
+    opacity: 0.4;
+    box-shadow: none;
+    transform: translateY(-2px);
+}
+
+[data-theme='dark'] #send.is-empty:not(.generating):hover {
+    background: #679efe;
+}
+
+#send svg {
+    width: 16px;
+    height: 16px;
+}
+
+#send:not(.generating) svg {
+    transform: none;
+}
+
+.file-input-hidden {
+    display: none;
+}
+
+@media (max-width: 600px) {
+    .footer {
+        padding: 0 12px calc(env(safe-area-inset-bottom, 0px) + 12px);
+    }
+
+    .input-wrapper {
+        padding: 8px 10px;
+    }
+
+    /*
+     * Sidepanel: icon-only primary tools to reduce density; menus keep labels.
+     * Exclude .tool-icon-img — browser-control uses a masked span icon, not SVG.
+     */
+    .tools-primary .tool-btn span:not(.tool-icon-img),
+    #tools-more-btn span {
+        display: none;
+    }
+
+    .tools-primary .tool-btn,
+    #tools-more-btn {
+        width: 32px;
+        justify-content: center;
+        padding: 0;
+    }
+
+    #capture-menu-btn span {
+        display: none;
+    }
+
+    #capture-menu-btn {
+        width: auto;
+        min-width: 32px;
+        padding: 0 6px;
+        gap: 2px;
+    }
+
+    .tools-menu-item span {
+        display: inline;
+    }
+
+    .tool-btn.tool-toggle.active::after,
+    .tool-btn.tool-toggle[aria-pressed='true']::after {
+        top: 4px;
+        right: 4px;
+    }
+}

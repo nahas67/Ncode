@@ -1,0 +1,194 @@
+{
+    "manifest_version": 3,
+    "name": "Ncode",
+    "short_name": "Ncode",
+    "version": "1.0.0",
+    "description": "Ncode — a zero-API-key agentic IDE and browser/PC harness driven by your logged-in gemini.google.com web session.",
+    "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8Tkiv3U7GyFUNtXT6vE1OxnZpHwbTDeSYinDy/G4Nh1480o1VTll9MpwJhJlvze2Yb8jDTsEHdL/UkLj5wov8E9GdNT0Moegpi1hvnKZeHqQGA1AnFKmfucM+OXPWeQsRcS/FcbL/TPeXeit7mfNKE8Vfcf9CeD25JszJyp9K6guNIksmxX27sQC34BNZU1MTzi8l3jm3ORHQ3pRcb66XD2RkW8QcoklRlRzZ7z6FgMB/AJPxHczRVQV2x7BGtbgudWF7EYxjeL6edtG7U+9GtOmentqGaRNkitFsd8SP6ZYoI+lxssDqp2PtyYjj6Ki6+/t9q5Q0WOR6ib0w2VVCwIDAQAB",
+    "permissions": [
+        "sidePanel",
+        "storage",
+        "contextMenus",
+        "scripting",
+        "alarms",
+        "debugger",
+        "tabs",
+        "tabGroups",
+        "downloads",
+        "nativeMessaging"
+    ],
+    "host_permissions": ["<all_urls>"],
+    "background": {
+        "service_worker": "background/index.js",
+        "type": "module"
+    },
+    "icons": {
+        "16": "assets/icons/icon-16.png",
+        "32": "assets/icons/icon-32.png",
+        "48": "assets/icons/icon-48.png",
+        "128": "assets/icons/icon-128.png"
+    },
+    "action": {
+        "default_title": "Open Gemini Chat",
+        "default_icon": {
+            "16": "assets/icons/icon-16.png",
+            "32": "assets/icons/icon-32.png",
+            "48": "assets/icons/icon-48.png",
+            "128": "assets/icons/icon-128.png"
+        }
+    },
+    "commands": {
+        "_execute_action": {
+            "suggested_key": {
+                "default": "Alt+G",
+                "mac": "Alt+G"
+            },
+            "description": "Open Gemini Nexus Sidebar"
+        },
+        "quick-ask": {
+            "suggested_key": {
+                "default": "Alt+Q",
+                "mac": "Alt+Q"
+            },
+            "description": "Open Gemini Nexus Quick Ask"
+        },
+        "area-ocr": {
+            "suggested_key": {
+                "default": "Alt+O",
+                "mac": "Alt+O"
+            },
+            "description": "Start Gemini Nexus Area OCR"
+        },
+        "browser-control": {
+            "suggested_key": {
+                "default": "Alt+Shift+B",
+                "mac": "Alt+Shift+B"
+            },
+            "description": "Toggle Gemini Nexus Browser Control"
+        }
+    },
+    "side_panel": {
+        "default_path": "sidepanel/index.html"
+    },
+    "sandbox": {
+        "pages": ["sandbox/index.html"]
+    },
+    "content_scripts": [
+        {
+            "matches": ["<all_urls>"],
+            "exclude_globs": ["*.mhtml*", "*.mht*", "*.MHTML*", "*.MHT*"],
+            "js": [
+                "content/page_guard.js",
+                "content/selection_blacklist.js",
+                "content/overlay.js",
+                "content/toolbar/icons.js",
+                "content/toolbar/styles/core.js",
+                "content/toolbar/styles/widget.js",
+                "content/toolbar/styles/markdown.js",
+                "content/toolbar/styles/panel/layout.js",
+                "content/toolbar/styles/panel/header.js",
+                "content/toolbar/styles/panel/body.js",
+                "content/toolbar/styles/panel/footer.js",
+                "content/toolbar/styles/panel/index.js",
+                "content/toolbar/styles/index.js",
+                "shared/utils/id_global.js",
+                "content/toolbar/bridge.js",
+                "content/toolbar/drag_controller.js",
+                "content/toolbar/i18n.js",
+                "content/speech_reader.js",
+                "shared/config/constants_global.js",
+                "shared/models/web_model_catalog.js",
+                "shared/models/web_thinking_global.js",
+                "content/toolbar/model_options.js",
+                "content/toolbar/templates.js",
+                "content/toolbar/view/layout.js",
+                "content/toolbar/view/widget.js",
+                "content/toolbar/view/image_preview.js",
+                "content/toolbar/view/translation_targets.js",
+                "content/toolbar/view/window.js",
+                "content/toolbar/view/dom.js",
+                "content/toolbar/view/index.js",
+                "content/toolbar/events.js",
+                "content/toolbar/ui/grammar.js",
+                "vendor/gemini-watermark-remover/page_process_runtime.js",
+                "shared/media/watermark_remover_global.js",
+                "content/toolbar/ui/renderer.js",
+                "content/toolbar/ui/actions_delegate.js",
+                "content/toolbar/ui/custom_selection_tools.js",
+                "content/toolbar/ui/translation_target_store.js",
+                "shared/ui/copy_feedback.js",
+                "content/toolbar/ui/code_copy.js",
+                "content/toolbar/ui/toolbar_ui.js",
+                "content/toolbar/actions.js",
+                "content/toolbar/image.js",
+                "content/toolbar/stream.js",
+                "content/toolbar/input_manager.js",
+                "shared/dom/crop_global.js",
+                "content/selection.js",
+                "content/toolbar/dispatch.js",
+                "content/toolbar/crop.js",
+                "content/toolbar/controller.js",
+                "content/shortcuts.js",
+                "content/settings_sync.js",
+                "content/messages.js",
+                "content/index.js"
+            ],
+            "run_at": "document_end"
+        },
+        {
+            "matches": ["*://*.youtube.com/*"],
+            "exclude_globs": ["*.mhtml*", "*.mht*", "*.MHTML*", "*.MHT*"],
+            "js": [
+                "shared/media/youtube_global.js",
+                "content/youtube_summary_i18n.js",
+                "content/youtube_summary_model.js",
+                "content/youtube_summary_render.js",
+                "content/youtube_summary_view.js",
+                "content/youtube_summary.js"
+            ],
+            "run_at": "document_end"
+        },
+        {
+            "matches": ["<all_urls>"],
+            "exclude_globs": ["*.mhtml*", "*.mht*", "*.MHTML*", "*.MHT*"],
+            "js": ["content/shortcut_frame_bridge.js"],
+            "run_at": "document_start",
+            "all_frames": true,
+            "match_about_blank": true
+        },
+        {
+            "matches": ["https://gemini.google.com/*", "https://business.gemini.google/*"],
+            "exclude_globs": ["*.mhtml*", "*.mht*", "*.MHTML*", "*.MHT*"],
+            "js": ["content/gemini_watermark_bridge.js"],
+            "run_at": "document_start"
+        },
+        {
+            "matches": ["https://gemini.google.com/*", "https://business.gemini.google/*"],
+            "exclude_globs": ["*.mhtml*", "*.mht*", "*.MHTML*", "*.MHT*"],
+            "js": [
+                "content/gemini_watermark_page.js",
+                "vendor/gemini-watermark-remover/content_main.js"
+            ],
+            "run_at": "document_start",
+            "world": "MAIN"
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "logo.png",
+                "sandbox/index.html",
+                "assets/cursors/cursor-chat.png",
+                "vendor/katex/katex.min.css",
+                "vendor/katex/fonts/*",
+                "vendor/highlight.js/atom-one-dark.min.css",
+                "vendor/highlight.js/atom-one-light.min.css"
+            ],
+            "matches": ["<all_urls>"]
+        }
+    ],
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self'",
+        "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline'; img-src 'self' https: http: data: blob:; media-src https: http: data: blob:;"
+    }
+}

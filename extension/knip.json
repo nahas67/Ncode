@@ -1,0 +1,25 @@
+{
+    "entry": [
+        "background/index.js",
+        "sidepanel/index.html",
+        "sidepanel/index.js",
+        "sidepanel/preload.js",
+        "sidepanel/core/**/*.js",
+        "sandbox/index.html",
+        "sandbox/index.js",
+        "settings/index.html",
+        "settings/index.js",
+        "content/**/*.js",
+        "shared/ui/**/*.js",
+        "shared/dom/**/*.js",
+        "shared/media/**/*.js",
+        "vendor/gemini-watermark-remover/**/*.js",
+        "scripts/*.mjs",
+        "scripts/**/*.js",
+        "scripts/*.test.js"
+    ],
+    "project": ["**/*.{js,mjs,ts}"],
+    "ignore": [],
+    "ignoreExportsUsedInFile": true,
+    "ignoreDependencies": []
+}

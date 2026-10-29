@@ -1,0 +1,88 @@
+.custom-selection-tools-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.custom-selection-tool-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 14px;
+    padding: 16px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: var(--bg-input);
+    transition:
+        background var(--settings-transition-speed, var(--duration-normal))
+            var(--settings-transition-easing-bezier),
+        box-shadow var(--settings-transition-speed, var(--duration-normal))
+            var(--settings-transition-easing-bezier);
+}
+
+.custom-selection-tool-row:hover {
+    background: var(--bg-input-focus);
+    box-shadow: none;
+}
+
+.custom-selection-tool-enabled-label {
+    display: flex;
+    align-items: center;
+    padding-top: 8px; /* aligns with the name input text */
+}
+
+.custom-selection-tool-enabled {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
+.custom-selection-tool-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+}
+
+.custom-selection-tool-name {
+    font-weight: 600;
+}
+
+.custom-selection-tool-name,
+.custom-selection-tool-prompt {
+    text-align: left;
+}
+
+.custom-selection-tool-prompt {
+    min-height: 82px;
+}
+
+.custom-selection-tool-remove {
+    margin-top: 4px; /* aligns with the name input */
+    white-space: nowrap;
+    opacity: 0.8;
+    transition:
+        opacity var(--settings-transition-speed, var(--duration-normal)) var(--ease-standard),
+        transform var(--settings-transition-speed, var(--duration-normal))
+            var(--settings-transition-easing-bezier);
+}
+
+.custom-selection-tool-remove:hover {
+    opacity: 1;
+    transform: scale(1.02);
+}
+
+@media (max-width: 430px) {
+    .custom-selection-tool-row {
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 10px;
+    }
+
+    .custom-selection-tool-remove {
+        grid-column: 2;
+        justify-self: start;
+        margin-top: 0;
+    }
+}

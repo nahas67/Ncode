@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <title>Gemini Nexus Bridge</title>
+        <script vite-ignore src="preload.js"></script>
+        <link rel="stylesheet" href="./index.css" />
+    </head>
+    <body>
+        <!-- Skeleton Shell for Instant Paint -->
+        <div id="skeleton">
+            <div class="sk-header">
+                <div class="sk-icon"></div>
+                <div class="sk-icon"></div>
+            </div>
+            <div class="sk-content"></div>
+            <div class="sk-footer">
+                <div class="sk-input"></div>
+            </div>
+        </div>
+
+        <!-- Iframe src is set by JS to include theme parameter -->
+        <iframe id="sandbox-frame" allow="clipboard-write; display-capture"></iframe>
+        <script src="index.js" type="module"></script>
+    </body>
+</html>

@@ -1,0 +1,22 @@
+{
+    "name": "ncode",
+    "private": true,
+    "version": "1.0.0",
+    "type": "module",
+    "description": "Ncode - a 100% working, zero-API-key Agentic IDE & Browser/PC Harness driven by the user's logged-in gemini.google.com web session.",
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "install:all": "npm --prefix extension install --no-audit --no-fund && npm --prefix pc-daemon install --no-audit --no-fund",
+        "build:extension": "npm --prefix extension run build && node extension/scripts/package-extension.mjs && node scripts/finalize-extension-dist.mjs",
+        "start:daemon": "node pc-daemon/server.mjs",
+        "start:daemon:stdio": "node pc-daemon/server.mjs --stdio",
+        "dev": "node scripts/dev.mjs",
+        "smoke:daemon": "node scripts/smoke-daemon.mjs",
+        "verify:extension": "node scripts/verify-extension-dist.mjs",
+        "test:orchestrator": "node orchestrator/smoke_test.mjs",
+        "test:pc-daemon": "node pc-daemon/smoke_test.mjs",
+        "check": "node scripts/check-all.mjs"
+    }
+}

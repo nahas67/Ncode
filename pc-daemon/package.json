@@ -1,0 +1,19 @@
+{
+    "name": "ncode-pc-daemon",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "description": "Ncode unified local PC & shell MCP daemon: Streamable HTTP MCP, WebSocket extension bridge and stdio transport with zero runtime dependencies.",
+    "main": "server.mjs",
+    "bin": {
+        "server": "./server.mjs"
+    },
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "start": "node server.mjs",
+        "stdio": "node server.mjs --stdio",
+        "smoke": "node smoke_test.mjs"
+    }
+}

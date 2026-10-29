@@ -1,0 +1,359 @@
+.msg.ai p {
+    margin: 0 0 12px 0;
+}
+
+.msg.ai p:last-child {
+    margin-bottom: 0;
+}
+
+/* Trim the tail margin of whatever block ends a message so bottom rhythm is
+ * identical whether a message ends in prose, a list, a table, a quote, or a
+ * code block (otherwise code blocks add a stray 16px before the 24px gap). */
+.message-content-container .msg-content > :last-child {
+    margin-bottom: 0;
+}
+
+.message-content-container .msg-content {
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.msg-content a {
+    color: var(--primary);
+    text-decoration-color: color-mix(in srgb, var(--primary) 55%, transparent);
+    text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.msg-content a:hover,
+.msg-content a:focus-visible {
+    color: var(--primary-hover);
+    text-decoration-color: currentColor;
+}
+
+.msg.ai h1,
+.msg.ai h2,
+.msg.ai h3 {
+    margin: 20px 0 8px 0;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* Explicit rungs: UA defaults (32/24px) overwhelm a ~420px sidepanel column. */
+.msg.ai h1 {
+    font-size: 20px;
+}
+
+.msg.ai h2 {
+    font-size: 18px;
+}
+
+.msg.ai h3 {
+    font-size: 16px;
+}
+
+.code-block-wrapper {
+    margin: 16px 0;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--code-bg);
+    overflow: hidden;
+}
+
+.code-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    user-select: none;
+}
+
+/* Light theme is the attribute-less default (boot only sets data-theme="dark"),
+ * so scope overrides with :not([data-theme='dark']) instead of a selector that
+ * can never match. */
+html:not([data-theme='dark']) .code-header {
+    background: #e9eef6;
+    border-bottom: 1px solid #e1e3e1;
+}
+
+.code-lang {
+    font-size: 11px;
+    color: var(--code-header-text);
+    text-transform: uppercase;
+    font-weight: 600;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.copy-code-btn {
+    background: transparent;
+    border: none;
+    color: var(--code-header-text);
+    cursor: pointer;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 28px;
+    padding: 4px 8px;
+    border-radius: calc(var(--radius-sm) - 2px);
+    transition:
+        background-color var(--duration-normal) var(--ease-standard),
+        color var(--duration-normal) var(--ease-standard);
+}
+
+.copy-code-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+}
+
+html:not([data-theme='dark']) .copy-code-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.copy-code-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.code-block-wrapper pre {
+    background: transparent;
+    color: var(--code-text);
+    padding: 16px;
+    margin: 0;
+    overflow-x: auto;
+    border: none;
+}
+
+.live-artifact-preview {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    background: color-mix(in srgb, var(--bg-body) 92%, var(--code-bg));
+}
+
+html:not([data-theme='dark']) .live-artifact-preview {
+    border-top-color: #d8dde6;
+    background: #f8fafd;
+}
+
+.live-artifact-preview[data-live-artifact-kind='html'] {
+    margin: 12px 0;
+    border-top: 0;
+    background: transparent;
+    overflow: visible;
+}
+
+html:not([data-theme='dark']) .live-artifact-preview[data-live-artifact-kind='html'] {
+    border-top-color: transparent;
+    background: transparent;
+}
+
+.live-artifact-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+html:not([data-theme='dark']) .live-artifact-header {
+    border-bottom-color: #e1e3e1;
+}
+
+.live-artifact-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    letter-spacing: 0;
+}
+
+.live-artifact-badge {
+    flex: 0 0 auto;
+    max-width: 8rem;
+    overflow: hidden;
+    color: var(--primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.live-artifact-body {
+    min-height: 220px;
+    max-height: min(520px, 70vh);
+    overflow: auto;
+    background: #ffffff;
+}
+
+[data-theme='dark'] .live-artifact-body {
+    background: var(--code-bg);
+}
+
+.live-artifact-body-html {
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+    background: transparent;
+}
+
+.live-artifact-body-mermaid,
+.live-artifact-body-graphviz {
+    display: grid;
+    place-items: center;
+    min-height: 150px;
+    max-height: none;
+    padding: 16px;
+}
+
+.live-artifact-body-mermaid svg,
+.live-artifact-body-graphviz svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+.live-artifact-body-error {
+    display: flex;
+    min-height: 72px;
+    max-height: none;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+.live-artifact-body-loading,
+.live-artifact-error {
+    color: #4f5968;
+    font-size: 13px;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+[data-theme='dark'] .live-artifact-body-loading,
+[data-theme='dark'] .live-artifact-error {
+    color: var(--text-secondary);
+}
+
+.live-artifact-frame {
+    display: block;
+    width: 100%;
+    height: min(420px, 64vh);
+    min-height: 220px;
+    border: 0;
+    background: #ffffff;
+}
+
+.live-artifact-body-html .live-artifact-frame {
+    height: 320px;
+    min-height: 120px;
+    background: transparent;
+}
+
+/* Code typography applies to every message role (model prose and tool
+ * output cards alike); the background neutralizer lets --code-bg on
+ * .code-block-wrapper win over the hljs theme's own background. */
+.msg code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.9em;
+}
+
+.msg pre code {
+    background: none;
+    padding: 0;
+    color: var(--code-text);
+}
+
+/* Highlight.js palette: the bundle ships atom-one-dark only (see boot/loader.js).
+ * Code blocks intentionally keep the dark --code-bg surface in light theme, so
+ * there are no per-theme token overrides here — do not reintroduce an
+ * atom-one-light import after atom-one-dark, it would win the cascade. */
+
+.msg :not(pre) > code {
+    background: var(--inline-code-bg);
+    color: var(--text-primary);
+    padding: 2px 6px;
+    border-radius: calc(var(--radius-sm) - 2px);
+    font-size: 0.9em;
+    font-weight: 500;
+}
+
+.msg.ai ul,
+.msg.ai ol {
+    margin: 8px 0 16px 0;
+    padding-left: 24px;
+}
+
+.msg.ai li {
+    margin-bottom: 6px;
+}
+
+.msg.ai blockquote {
+    border-left: 3px solid var(--primary);
+    margin: 16px 0;
+    padding: 4px 16px;
+    color: var(--text-secondary);
+    background: transparent;
+}
+
+/* Markdown tables: quiet ruled style — header underline plus row hairlines.
+   Column alignment comes from the renderer's align attributes, so text-align
+   is only applied as a default via :not([align]). */
+.msg-content table {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    margin: 16px 0;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 0.95em;
+}
+
+.msg-content th,
+.msg-content td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.msg-content th:not([align]),
+.msg-content td:not([align]) {
+    text-align: start;
+}
+
+.msg-content th {
+    font-weight: 600;
+    color: var(--text-primary);
+    border-bottom: 1px solid color-mix(in srgb, var(--text-secondary) 40%, transparent);
+}
+
+.msg-content td {
+    color: var(--text-secondary);
+}
+
+.msg-content tbody tr:last-child td {
+    border-bottom: none;
+}
+
+/* Markdown thematic breaks: quiet hairline instead of the UA's inset border. */
+.msg-content hr {
+    margin: 16px 0;
+    border: none;
+    border-top: 1px solid var(--border-color);
+}
+
+/* Display math can exceed the narrow sidepanel column; scroll it in place
+ * instead of stretching the message row. */
+.msg-content .katex-display {
+    margin: 12px 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 2px;
+}
