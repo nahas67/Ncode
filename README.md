@@ -56,7 +56,7 @@ Prerequisites: **Node.js ≥ 20**, **Chrome**, and a Chrome profile **signed in 
 ```bash
 cd Ncode
 npm run install:all        # extension deps (vite, marked, katex, …) + pc-daemon (no deps)
-npm run build:extension    # vite build → package → loadable extension/dist
+npm run build              # alias of build:extension → vite build → package → loadable extension/dist
 npm run start:daemon       # HTTP MCP 127.0.0.1:3001 + WS bridge 127.0.0.1:8085
 ```
 

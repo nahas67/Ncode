@@ -9,6 +9,7 @@
     },
     "scripts": {
         "install:all": "npm --prefix extension install --no-audit --no-fund && npm --prefix pc-daemon install --no-audit --no-fund",
+        "build": "npm run build:extension",
         "build:extension": "npm --prefix extension run build && node extension/scripts/package-extension.mjs && node scripts/finalize-extension-dist.mjs",
         "start:daemon": "node pc-daemon/server.mjs",
         "start:daemon:stdio": "node pc-daemon/server.mjs --stdio",
