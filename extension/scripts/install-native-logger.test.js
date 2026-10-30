@@ -103,7 +103,14 @@ describe('install / uninstall', () => {
             manifestDir: join(work, 'manifest'),
             sourceHost: new URL('./native-logger/host.js', import.meta.url).pathname,
         });
-        expect(statSync(hostScriptPath).mode & 0o111).toBeTruthy(); // any execute bit
+        expect(statSync(hostScriptPath).isFile()).toBe(true);
+        if (process.platform === 'win32') {
+            // Windows has no POSIX execute bits; the installed file itself is the
+            // contract there (the installer still requests mode 0o755).
+            expect(statSync(hostScriptPath).isFile()).toBe(true);
+        } else {
+            expect(statSync(hostScriptPath).mode & 0o111).toBeTruthy(); // any execute bit
+        }
         rmSync(work, { recursive: true, force: true });
     });
 });

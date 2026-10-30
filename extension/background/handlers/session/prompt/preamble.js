@@ -10,7 +10,7 @@
  *      `chrome_snapshot`/`chrome_click`/`chrome_fill`/`chrome_evaluate` tools.
  *      Those names are treated as aliases by this preamble and map to
  *      take_snapshot / click / fill / evaluate_script.
- *   2. External PC daemon MCP tools served by the local `ncode_local_pc` MCP
+ *   2. External PC daemon MCP tools served by the local `ncode-pc-daemon` MCP
  *      server on http://127.0.0.1:3001/mcp — namespaced `<server>__<tool>` when
  *      several servers are configured.
  *
@@ -41,16 +41,14 @@ Never emit multiple tool calls in one reply, and never claim a tool ran unless i
 - Downloads: list_downloads ({ "limit"?, "filenameContains"?, "status"? }), wait_for_download ({ "timeout"?, "filenameContains"? })
 Aliases: chrome_snapshot = take_snapshot, chrome_click = click, chrome_fill = fill, chrome_evaluate = evaluate_script (prefer the real names above).
 
-**SURFACE 2 — External PC daemon MCP tools** (run on the host machine via MCP server "ncode_local_pc", endpoint http://127.0.0.1:3001/mcp):
-- pc_exec_shell — run a shell command on the PC (use for builds, git, tests, servers).
-- pc_fs_read — read a file from disk.
-- pc_fs_write — write/overwrite a file on disk atomically.
-- pc_fs_patch — surgical unique-string replace inside a file (returns a unified diff).
-- pc_search_code — regex search across files (ripgrep-style results).
-- pc_system_info — OS/CPU/memory/node/cwd facts.
-- workflow_save_checkpoint — persist an Ncode workflow checkpoint (workflowId + checkpoint).
-- workflow_load_checkpoint — reload a persisted workflow checkpoint.
-When more than one MCP server is configured, prefix the tool id with the server id: "ncode_local_pc__pc_exec_shell". Use PC tools for files, commands and checkpoint persistence; use Chrome tools for everything inside the browser.
+**SURFACE 2 — External PC daemon MCP tools** (run on the host machine via MCP server "ncode-pc-daemon", endpoint http://127.0.0.1:3001/mcp):
+- Shell: pc_exec_shell — run a shell command on the PC (builds, git, tests, servers) with a persistent per-workflow cwd/env when workflowId is set; pc_bg_process — start/status/logs/kill long-running dev servers and processes; pc_shell_session — inspect/reset the persistent shell session.
+- Files & IDE: pc_fs_tree — fast gitignore-aware directory tree; pc_fs_read — read a file; pc_fs_write — write/overwrite atomically; pc_fs_patch — surgical unique-string replace (unified diff preview); pc_search_code — regex/ripgrep search with context lines.
+- Git: pc_git_status_diff — status + diff + recent commits in one call; pc_git_status, pc_git_diff, pc_git_add, pc_git_commit, pc_git_checkout, pc_git_log for individual operations.
+- Computer use: pc_desktop_screenshot — capture the desktop screen; pc_clipboard — read/write the system clipboard.
+- System: pc_system_info — OS/CPU/memory/node/cwd facts.
+- Checkpoints: workflow_save_checkpoint / workflow_load_checkpoint / workflow_list_checkpoints — persist and restore Ncode workflow checkpoints.
+When more than one MCP server is configured, prefix the tool id with the server id: "ncode-pc-daemon__pc_exec_shell". Use PC tools for files, commands and checkpoint persistence; use Chrome tools for everything inside the browser.
 
 **NCODE STATUS TAGS** (parsed out of your text and written to the harness bar — never invent fake progress):
 1. Before every tool call emit ONE concise live status line:

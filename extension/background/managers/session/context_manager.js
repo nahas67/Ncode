@@ -552,3 +552,168 @@ export async function prepareManagedContext(request, settings, history, signal, 
         };
     }
 }
+
+// Gemini Web server-side conversation cursor.
+//
+// The reverse-engineered StreamGenerate request carries a three-id continuation
+// cursor [conversationId, responseId, choiceId]. Ncode keeps that cursor in
+// chrome.storage.local so:
+//   - every web turn continues the same gemini.google.com chat thread, and
+//   - Compact & Resume can reset it to null/null/null, which makes the next
+//     turn open a brand-new, clean gemini.google.com conversation pre-hydrated
+//     with the compacted checkpoint instead of resuming a stale, bloated one.
+//
+// The cursor is intentionally NOT part of the classic "context compression"
+// summary: history text and the server-side cursor are independent concerns.
+
+export const NCODE_WEB_CURSOR_STORAGE_KEY = 'ncodeWebConversationCursor';
+
+/** The canonical "brand-new chat" cursor. */
+export const EMPTY_WEB_CONVERSATION_CURSOR = Object.freeze({
+    conversationId: null,
+    responseId: null,
+    choiceId: null,
+});
+
+/** In-memory mirror so hot loops do not hit chrome.storage on every turn. */
+let cachedWebConversationCursor = { ...EMPTY_WEB_CONVERSATION_CURSOR };
+
+function resolveCursorStorageArea(storageArea) {
+    if (storageArea && typeof storageArea.get === 'function') return storageArea;
+    try {
+        if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
+            return chrome.storage.local;
+        }
+    } catch {
+        // Chrome APIs unavailable (unit tests / non-extension contexts).
+    }
+    return null;
+}
+
+function normalizeCursorId(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Normalizes one persisted cursor row. Accepts both an id array
+ * (`['c','r','x']`, the parser's native shape) and an object.
+ *
+ * @param {unknown} raw
+ * @returns {{ conversationId: string|null, responseId: string|null, choiceId: string|null }}
+ */
+export function normalizeWebConversationCursor(raw) {
+    if (Array.isArray(raw)) {
+        return {
+            conversationId: normalizeCursorId(raw[0]),
+            responseId: normalizeCursorId(raw[1]),
+            choiceId: normalizeCursorId(raw[2]),
+        };
+    }
+    if (raw && typeof raw === 'object') {
+        return {
+            conversationId: normalizeCursorId(raw.conversationId),
+            responseId: normalizeCursorId(raw.responseId),
+            choiceId: normalizeCursorId(raw.choiceId),
+        };
+    }
+    return { ...EMPTY_WEB_CONVERSATION_CURSOR };
+}
+
+/**
+ * True when the cursor has no server-side thread attached (a fresh chat).
+ * @param {{ conversationId?: string|null }|null|undefined} cursor
+ * @returns {boolean}
+ */
+export function isWebConversationCursorFresh(cursor) {
+    const normalized = normalizeWebConversationCursor(cursor);
+    return (
+        normalized.conversationId === null &&
+        normalized.responseId === null &&
+        normalized.choiceId === null
+    );
+}
+
+/**
+ * Reads the persisted Gemini Web conversation cursor. Never throws.
+ * @param {{ storageArea?: object|null }} [options]
+ * @returns {Promise<{ conversationId: string|null, responseId: string|null, choiceId: string|null }>}
+ */
+export async function getWebConversationCursor({ storageArea = null } = {}) {
+    const area = resolveCursorStorageArea(storageArea);
+    if (!area?.get) return { ...cachedWebConversationCursor };
+    try {
+        const stored = await area.get([NCODE_WEB_CURSOR_STORAGE_KEY]);
+        cachedWebConversationCursor = normalizeWebConversationCursor(
+            stored?.[NCODE_WEB_CURSOR_STORAGE_KEY]
+        );
+    } catch (error) {
+        console.warn('[Ncode] Failed to read Gemini Web conversation cursor:', error);
+    }
+    return { ...cachedWebConversationCursor };
+}
+
+/**
+ * Persists the cursor returned by a successful StreamGenerate response.
+ *
+ * @param {unknown} ids id triple or {conversationId,responseId,choiceId}
+ * @param {{ storageArea?: object|null }} [options]
+ * @returns {Promise<{ conversationId: string|null, responseId: string|null, choiceId: string|null }>}
+ */
+export async function updateWebConversationCursor(ids, { storageArea = null } = {}) {
+    const normalized = normalizeWebConversationCursor(ids);
+    cachedWebConversationCursor = normalized;
+    const area = resolveCursorStorageArea(storageArea);
+    try {
+        await area?.set?.({ [NCODE_WEB_CURSOR_STORAGE_KEY]: normalized });
+    } catch (error) {
+        console.warn('[Ncode] Failed to persist Gemini Web conversation cursor:', error);
+    }
+    return { ...normalized };
+}
+
+/**
+ * Resets the server-side Gemini Web conversation cursor so the next turn opens
+ * a brand-new clean chat. Used by Compact & Resume.
+ *
+ * @param {{ storageArea?: object|null }} [options]
+ * @returns {Promise<{ conversationId: null, responseId: null, choiceId: null, reset: boolean }>}
+ */
+export async function resetWebConversationCursor({ storageArea = null } = {}) {
+    const area = resolveCursorStorageArea(storageArea);
+    cachedWebConversationCursor = { ...EMPTY_WEB_CONVERSATION_CURSOR };
+    let persisted = true;
+    try {
+        if (area?.remove) {
+            await area.remove([NCODE_WEB_CURSOR_STORAGE_KEY]);
+        } else if (area?.set) {
+            await area.set({
+                [NCODE_WEB_CURSOR_STORAGE_KEY]: { ...EMPTY_WEB_CONVERSATION_CURSOR },
+            });
+        }
+    } catch (error) {
+        persisted = false;
+        console.warn('[Ncode] Failed to reset Gemini Web conversation cursor:', error);
+    }
+    return { ...EMPTY_WEB_CONVERSATION_CURSOR, reset: persisted };
+}
+
+/**
+ * Returns the id triple in the transport's native array shape
+ * (`[conversationId ?? '', responseId ?? '', choiceId ?? '']`).
+ *
+ * @param {{ conversationId?: string|null, responseId?: string|null, choiceId?: string|null }|null} [cursor]
+ * @returns {[string, string, string]}
+ */
+export function toWebConversationIds(cursor = cachedWebConversationCursor) {
+    const normalized = normalizeWebConversationCursor(cursor);
+    return [
+        normalized.conversationId || '',
+        normalized.responseId || '',
+        normalized.choiceId || '',
+    ];
+}
+
+/** Clears the in-memory cursor mirror (tests / worker restart). */
+export function clearWebConversationCursorMemory() {
+    cachedWebConversationCursor = { ...EMPTY_WEB_CONVERSATION_CURSOR };
+}

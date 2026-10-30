@@ -14,6 +14,7 @@ export class SessionMessageHandler {
      *   compactManager?: object|null,
      *   harnessStatus?: object|null,
      *   bridgeClient?: object|null,
+     *   approvalManager?: object|null,
      * }} [ncodeDeps]
      */
     constructor(sessionManager, imageHandler, controlManager, mcpManager, ncodeDeps = {}) {
@@ -24,6 +25,7 @@ export class SessionMessageHandler {
             compactManager: ncodeDeps.compactManager || null,
             harnessStatus: ncodeDeps.harnessStatus || null,
             bridgeClient: ncodeDeps.bridgeClient || null,
+            approvalManager: ncodeDeps.approvalManager || null,
         });
         this.quickAskHandler = new QuickAskHandler(sessionManager, imageHandler);
         this.contextHandler = new ContextHandler(sessionManager);
@@ -101,5 +103,36 @@ export class SessionMessageHandler {
         if (this.quickAskHandler.isActiveTab(tabId)) {
             this.sessionManager.cancelCurrentRequest(`quickAsk:${tabId}`);
         }
+    }
+
+    /**
+     * Resumes the autonomous loop right after a MANUAL Compact & Resume.
+     *
+     * A manual compaction happens outside an active prompt run, so nothing
+     * would continue executing the pending subgoals. This kicks off one new run
+     * whose first turn is pre-hydrated with the compacted checkpoint summary
+     * (`ncodeResumeHydration`) and the goal directive. Returns false when
+     * another run is already active (the button is disabled while busy, but a
+     * race is still possible).
+     *
+     * @param {{ sessionId?: string|null, hydrationText?: string }} args
+     * @returns {boolean} true when the resume run was started
+     */
+    resumeAfterCompaction({ sessionId = null, hydrationText = '' } = {}) {
+        if (!sessionId) return false;
+        const hydration = typeof hydrationText === 'string' ? hydrationText.trim() : '';
+        this.promptHandler.handle(
+            {
+                action: 'SEND_PROMPT',
+                sessionId,
+                text: hydration || 'Continue the task from the compacted checkpoint.',
+                ncodeGoalMode: true,
+                ncodeResumeHydration: hydration,
+                enableBrowserControl: false,
+                internalResume: true,
+            },
+            () => {}
+        );
+        return true;
     }
 }

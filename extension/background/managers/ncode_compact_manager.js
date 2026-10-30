@@ -9,7 +9,7 @@
  *     asking for the structured checkpoint JSON.
  *  4. Persist the checkpoint durably under `buildCheckpointStorageKey(workflowId)`
  *     AND best-effort mirror it into the local PC daemon through the namespaced
- *     MCP tool `ncode_local_pc__workflow_save_checkpoint`.
+ *     MCP tool `ncode-pc-daemon__workflow_save_checkpoint`.
  *  5. Write the pruned message list back to history.
  *  6. "Spawn" the resumed Gemini Web conversation and hand the hydration block
  *     back to the caller, which continues the tool loop autonomously with
@@ -51,11 +51,13 @@ import {
     normalizeNcodeMcpServers,
 } from '../../shared/settings/connection.js';
 import { getConnectionSettings } from './session/settings_store.js';
+import { resetWebConversationCursor } from './session/context_manager.js';
 import { replaceSessionSnapshot } from './history_manager.js';
 
 export const NCODE_COMPACTION_STATE_ACTION = 'NCODE_COMPACTION_STATE';
 const COMPACTION_ABORT_KEY = 'ncode-compaction';
 const MCP_CHECKPOINT_TIMEOUT_MS = 5000;
+const SHELL_CONTEXT_TIMEOUT_MS = 1500;
 const MAX_CHECKPOINT_TOOL_OUTPUT_CHARS = 160;
 
 const COMPACTION_SYSTEM_INSTRUCTION = `You are the Ncode context compaction engine.
@@ -488,6 +490,9 @@ export class NcodeCompactManager {
      * from an in-memory-only checkpoint that is lost on the next worker restart.
      */
     async persistCheckpointWithMcp({ checkpoint, session, messages }) {
+        // Enrich the checkpoint with the live shell working directory before it
+        // becomes durable, so the resumed turn knows where commands should run.
+        await this.attachShellContext(checkpoint);
         const storageKey = buildCheckpointStorageKey(checkpoint.workflowId);
         const persisted = await this.persistCheckpoint({ storageKey, checkpoint });
         if (persisted !== true) {
@@ -518,13 +523,25 @@ export class NcodeCompactManager {
             typeof hydrationPrompt === 'string' ? hydrationPrompt : this.activeHydrationPrompt;
 
         let contextReset = false;
+        let cursorReset = false;
         if (!(typeof isCancelled === 'function' && isCancelled() === true)) {
             try {
                 const settings = await getConnectionSettings();
                 const provider = settings?.provider || 'web';
-                if (provider === 'web' && typeof this.sessionManager?.resetContext === 'function') {
-                    await this.sessionManager.resetContext();
-                    contextReset = true;
+                if (provider === 'web') {
+                    // CRITICAL: the reverse-engineered StreamGenerate request
+                    // carries a server-side conversation cursor
+                    // [conversationId, responseId, choiceId]. Resetting it makes
+                    // the next turn open a brand-new clean gemini.google.com chat
+                    // instead of continuing the bloated thread we just compacted.
+                    const cursor = await resetWebConversationCursor({
+                        storageArea: this.storageArea,
+                    });
+                    cursorReset = cursor?.reset === true;
+                    if (typeof this.sessionManager?.resetContext === 'function') {
+                        await this.sessionManager.resetContext();
+                        contextReset = true;
+                    }
                 }
             } catch (error) {
                 console.warn(
@@ -538,11 +555,11 @@ export class NcodeCompactManager {
             sessionId,
             workflowId: checkpoint?.workflowId || this.activeWorkflowId,
             state: 'resumed_context',
-            detail: { contextReset, inLoop: inLoop === true },
+            detail: { contextReset, cursorReset, inLoop: inLoop === true },
         });
 
         // The durable chat session id is reused on purpose (see file header).
-        return { sessionId, contextReset };
+        return { sessionId, contextReset, cursorReset };
     }
 
     /**
@@ -617,7 +634,7 @@ export class NcodeCompactManager {
 
     /**
      * Best-effort mirror of the checkpoint into the local PC daemon via the
-     * namespaced MCP tool `ncode_local_pc__workflow_save_checkpoint`.
+     * namespaced MCP tool `ncode-pc-daemon__workflow_save_checkpoint`.
      */
     async saveCheckpointViaMcp({ workflowId, checkpoint }) {
         if (!this.mcpManager || typeof this.mcpManager.callToolById !== 'function') {
@@ -691,6 +708,24 @@ export class NcodeCompactManager {
             completedSubgoals: Array.isArray(checkpoint.completedSubgoals)
                 ? checkpoint.completedSubgoals
                 : [],
+            pendingSubgoals: Array.isArray(checkpoint.pendingSubgoals)
+                ? checkpoint.pendingSubgoals
+                : [],
+            modifiedFiles: Array.isArray(checkpoint.modifiedFiles)
+                ? checkpoint.modifiedFiles
+                : [],
+            currentCwd: typeof checkpoint.currentCwd === 'string' ? checkpoint.currentCwd : '',
+            keyFindings: Array.isArray(checkpoint.keyFindings)
+                ? checkpoint.keyFindings
+                : Array.isArray(checkpoint.discoveredFactsAndErrors)
+                  ? checkpoint.discoveredFactsAndErrors
+                  : [],
+            nextStep:
+                typeof checkpoint.nextStep === 'string'
+                    ? checkpoint.nextStep
+                    : typeof checkpoint.nextImmediateAction === 'string'
+                      ? checkpoint.nextImmediateAction
+                      : '',
             modifiedFilesAndCommands: Array.isArray(checkpoint.modifiedFilesAndCommands)
                 ? checkpoint.modifiedFilesAndCommands
                 : [],
@@ -700,8 +735,48 @@ export class NcodeCompactManager {
             nextImmediateAction:
                 typeof checkpoint.nextImmediateAction === 'string'
                     ? checkpoint.nextImmediateAction
-                    : '',
+                    : typeof checkpoint.nextStep === 'string'
+                      ? checkpoint.nextStep
+                      : '',
         };
+    }
+
+    /**
+     * Fills `checkpoint.currentCwd` from the local PC daemon's stateful shell
+     * session (workflowId-scoped). Best-effort: the daemon may be offline or
+     * predate the `pc_shell_session` tool, in which case cwd stays unknown.
+     *
+     * @param {Record<string, unknown>} checkpoint
+     * @returns {Promise<Record<string, unknown>>}
+     */
+    async attachShellContext(checkpoint) {
+        if (!checkpoint || typeof checkpoint !== 'object') return checkpoint;
+        if (typeof checkpoint.currentCwd === 'string' && checkpoint.currentCwd) return checkpoint;
+        if (!this.mcpManager || typeof this.mcpManager.callToolById !== 'function') {
+            return checkpoint;
+        }
+        let servers = [];
+        try {
+            servers = normalizeNcodeMcpServers([]);
+        } catch {
+            servers = [];
+        }
+        try {
+            const toolId = `${NCODE_LOCAL_MCP_SERVER_ID}__pc_shell_session`;
+            const result = await this.withTimeout(
+                this.mcpManager.callToolById(
+                    toolId,
+                    { action: 'info', workflowId: checkpoint.workflowId },
+                    servers
+                ),
+                SHELL_CONTEXT_TIMEOUT_MS
+            );
+            const cwd = extractCwdFromShellToolResult(result);
+            if (cwd) checkpoint.currentCwd = cwd;
+        } catch {
+            // Daemon offline / tool unavailable: the checkpoint still resumes.
+        }
+        return checkpoint;
     }
 
     /** Builds a valid (unstored) goal session for manual compaction without a goal. */
@@ -793,4 +868,27 @@ export class NcodeCompactManager {
             );
         });
     }
+}
+
+/**
+ * Extracts the persistent shell cwd from a `pc_shell_session` MCP tool result.
+ * The daemon returns either a JSON text payload or a plain text report.
+ *
+ * @param {{ text?: string, isError?: boolean }|null} result
+ * @returns {string}
+ */
+function extractCwdFromShellToolResult(result) {
+    if (!result || result.isError === true) return '';
+    const text = typeof result.text === 'string' ? result.text : '';
+    if (!text.trim()) return '';
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed.cwd === 'string' && parsed.cwd.trim()) {
+            return parsed.cwd.trim();
+        }
+    } catch {
+        // Not JSON: fall back to the reported text form.
+    }
+    const match = text.match(/^cwd:\s*(.+)$/im);
+    return match ? match[1].trim() : '';
 }

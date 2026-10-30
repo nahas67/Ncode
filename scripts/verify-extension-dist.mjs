@@ -60,8 +60,16 @@ async function main() {
     check('dist directory exists', await exists(distDir));
 
     const manifest = JSON.parse(await read(distDir, 'manifest.json'));
+    const sourceManifest = JSON.parse(
+        await readFile(path.join(extensionDir, 'manifest.json'), 'utf8')
+    );
     check('manifest v3', manifest.manifest_version === 3, `v${manifest.version}`);
-    check('manifest identity is Ncode', manifest.name === 'Ncode' && manifest.version === '1.0.0');
+    check(
+        'manifest identity mirrors source manifest',
+        manifest.name === sourceManifest.name && manifest.version === sourceManifest.version,
+        `${manifest.name}@${manifest.version}`
+    );
+    check('manifest identity is Ncode', manifest.name === 'Ncode');
     check(
         'MV3 module service worker declared',
         manifest.background?.service_worker === 'background/index.js' &&
@@ -81,11 +89,106 @@ async function main() {
                 manifest.permissions.includes(permission)
             )
     );
+
+    // The packaged extension must reach the local daemon over HTTP/WS and the
+    // Gemini Web platform. These must be declared explicitly in host_permissions
+    // (a bare `<all_urls>` is not enough for the release contract, even though it
+    // is also present).
+    const hostPermissions = manifest.host_permissions || [];
+    const requiredHostPatterns = [
+        'http://127.0.0.1/*',
+        'http://localhost/*',
+        'ws://127.0.0.1/*',
+        'https://gemini.google.com/*',
+    ];
+    const missingHostPatterns = requiredHostPatterns.filter(
+        (pattern) => !hostPermissions.includes(pattern)
+    );
+    check(
+        'local daemon + Gemini Web host permissions present',
+        missingHostPatterns.length === 0,
+        missingHostPatterns.join(', ')
+    );
+
     check(
         'content script bundle declared',
         (manifest.content_scripts || []).some((entry) =>
             (entry.js || []).some((file) => file === 'content/index.js' || file === 'content/youtube_summary_bundle.js')
         ) || (manifest.content_scripts || []).length > 0
+    );
+    const geminiDomBridgeEntry = (manifest.content_scripts || []).find((entry) =>
+        (entry.js || []).includes('content/gemini_dom_bridge.js')
+    );
+    check(
+        'Gemini DOM bridge content script shipped for gemini.google.com',
+        Boolean(geminiDomBridgeEntry) &&
+            (geminiDomBridgeEntry.matches || []).includes('https://gemini.google.com/*'),
+        geminiDomBridgeEntry ? '' : 'content/gemini_dom_bridge.js content_scripts entry missing'
+    );
+
+    // Every file the manifest points at must exist inside dist.
+    const manifestReferences = [];
+    const addReference = (reference) => {
+        if (typeof reference !== 'string' || !reference) return;
+        if (/^(?:https?:|data:|chrome-extension:)/i.test(reference)) return;
+        manifestReferences.push(reference.replace(/^\/+/, ''));
+    };
+    addReference(manifest.background?.service_worker);
+    addReference(manifest.side_panel?.default_path);
+    for (const page of manifest.sandbox?.pages || []) addReference(page);
+    for (const icon of Object.values(manifest.icons || {})) addReference(icon);
+    for (const icon of Object.values(manifest.action?.default_icon || {})) addReference(icon);
+    for (const entry of manifest.content_scripts || []) {
+        for (const file of entry.js || []) addReference(file);
+        for (const file of entry.css || []) addReference(file);
+    }
+    for (const resource of manifest.web_accessible_resources || []) {
+        for (const file of resource.resources || []) addReference(file);
+    }
+    const missingManifestFiles = [];
+    for (const reference of [...new Set(manifestReferences)]) {
+        if (reference.includes('*')) {
+            // Glob resource patterns only need their parent directory to exist.
+            const baseDirectory = reference.split('*')[0].replace(/\/?$/, '');
+            const parent = baseDirectory.includes('/')
+                ? path.dirname(path.join(distDir, baseDirectory))
+                : distDir;
+            if (!(await exists(parent))) missingManifestFiles.push(reference);
+            continue;
+        }
+        if (!(await exists(path.join(distDir, reference)))) missingManifestFiles.push(reference);
+    }
+    check(
+        'every manifest-referenced file packaged',
+        missingManifestFiles.length === 0,
+        missingManifestFiles.slice(0, 8).join(', ')
+    );
+
+    const requiredTopLevelDirectories = [
+        'background',
+        'content',
+        'sandbox',
+        'sidepanel',
+        'services',
+        'shared',
+        'settings',
+        'css',
+        'assets',
+        'vendor',
+    ];
+    const missingDirectories = [];
+    for (const directory of requiredTopLevelDirectories) {
+        if (!(await exists(path.join(distDir, directory)))) missingDirectories.push(directory);
+    }
+    check(
+        'runtime directories packaged',
+        missingDirectories.length === 0,
+        missingDirectories.join(', ')
+    );
+    check(
+        'top-level logo + css harness stylesheet packaged',
+        (await exists(path.join(distDir, 'logo.png'))) &&
+            (await exists(path.join(distDir, 'css/ncode_harness.css')))
     );
 
     const backgroundFiles = await collectJsFiles(path.join(distDir, 'background'));
@@ -126,6 +229,10 @@ async function main() {
     check(
         'packaged Ncode local MCP server default',
         connectionSource.includes('Ncode Local PC & Shell') &&
+            // Canonical settings id (Phase 3 contract): the namespaced tool ids are
+            // `ncode-pc-daemon__<tool>`. Legacy `ncode_local_pc` ids are migrated by
+            // the force-merge, so the canonical id must be the packaged default.
+            connectionSource.includes('ncode-pc-daemon') &&
             connectionSource.includes('ncode_local_pc') &&
             connectionSource.includes('normalizeNcodeMcpServers')
     );

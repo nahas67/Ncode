@@ -3,13 +3,15 @@
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { NCODE_LOCAL_MCP_SERVER_ID } from '../../extension/shared/settings/connection.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..', '..');
 const distDir = path.join(rootDir, 'extension', 'dist');
 
 const url = 'http://127.0.0.1:3001/mcp';
 const server = {
-    id: 'ncode_local_pc',
+    id: NCODE_LOCAL_MCP_SERVER_ID,
     name: 'Ncode Local PC & Shell',
     transport: 'streamable-http',
     url,
@@ -37,7 +39,7 @@ try {
         mcpEnabled: true,
         mcpTransport: 'streamable-http',
         mcpServerUrl: url,
-        mcpServerId: 'ncode_local_pc',
+        mcpServerId: NCODE_LOCAL_MCP_SERVER_ID,
         mcpToolMode: 'all',
         mcpEnabledTools: [],
     };
@@ -58,7 +60,7 @@ try {
     console.log('[mcp-probe] callTool pc_fs_read isError=', read.isError, 'text=', String(read.text).replace(/\s+/g, ' ').slice(0, 200));
 
     const byId = await manager.callToolById(
-        'ncode_local_pc__pc_search_code',
+        `${NCODE_LOCAL_MCP_SERVER_ID}__pc_search_code`,
         { directory: path.join(rootDir, 'orchestrator'), pattern: 'createGoalSession', fileGlob: '*.js' },
         [server]
     );

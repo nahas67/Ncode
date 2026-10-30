@@ -24,10 +24,36 @@ import {
 // Ncode's built-in local PC & shell MCP daemon (zero-dependency, ships with the
 // repo). Unlike user-configured servers it is always present and enabled so the
 // agent can drive the host machine and read/write workflow checkpoints.
-export const NCODE_LOCAL_MCP_SERVER_ID = 'ncode_local_pc';
+//
+// The settings id is the canonical `ncode-pc-daemon` (same name the daemon
+// advertises over MCP). Tool ids are namespaced as `<serverId>__<toolName>`, so
+// this id also prefixes the checkpoint tool:
+// `ncode-pc-daemon__workflow_save_checkpoint`.
+//
+// Earlier Ncode builds persisted the settings id `ncode_local_pc`; the merge
+// below recognises that legacy id by its 127.0.0.1:3001 URL and rewrites it to
+// the canonical entry, so older profiles migrate without losing user servers.
+export const NCODE_LOCAL_MCP_SERVER_ID = 'ncode-pc-daemon';
+export const NCODE_LEGACY_LOCAL_MCP_SERVER_ID = 'ncode_local_pc';
 export const NCODE_LOCAL_MCP_SERVER_NAME = 'Ncode Local PC & Shell';
 export const NCODE_LOCAL_MCP_URL = 'http://127.0.0.1:3001/mcp';
 const NCODE_LOCAL_MCP_TRANSPORT = 'streamable-http';
+
+/**
+ * Canonical built-in local PC & shell MCP server entry.
+ *
+ * `enabled` + `autoConnect` are always true: a saved/edited/stale entry can
+ * never opt the built-in daemon out of the settings payload, and the MCP
+ * manager reconnects it automatically once the daemon starts listening.
+ */
+export const NCODE_DEFAULT_MCP_SERVER = Object.freeze({
+    id: NCODE_LOCAL_MCP_SERVER_ID,
+    name: NCODE_LOCAL_MCP_SERVER_NAME,
+    transport: NCODE_LOCAL_MCP_TRANSPORT,
+    url: NCODE_LOCAL_MCP_URL,
+    enabled: true,
+    autoConnect: true,
+});
 
 export const CONNECTION_STORAGE_KEYS = [
     'geminiProvider',
@@ -185,12 +211,8 @@ export function createDefaultNcodeMcpServer(overrides = {}) {
             ? { ...source.headers }
             : {};
     return {
-        id: NCODE_LOCAL_MCP_SERVER_ID,
-        name: NCODE_LOCAL_MCP_SERVER_NAME,
-        transport: NCODE_LOCAL_MCP_TRANSPORT,
-        url: NCODE_LOCAL_MCP_URL,
+        ...NCODE_DEFAULT_MCP_SERVER,
         headers,
-        enabled: true,
         toolMode: typeof source.toolMode === 'string' && source.toolMode ? source.toolMode : 'all',
         enabledTools: Array.isArray(source.enabledTools) ? [...source.enabledTools] : [],
     };
@@ -206,19 +228,25 @@ function normalizeMcpUrlForCompare(rawUrl) {
 function isNcodeLocalMcpServerEntry(server) {
     if (!server || typeof server !== 'object' || Array.isArray(server)) return false;
     if (server.id === NCODE_LOCAL_MCP_SERVER_ID) return true;
+    if (server.id === NCODE_LEGACY_LOCAL_MCP_SERVER_ID) return true;
     return normalizeMcpUrlForCompare(server.url) === normalizeMcpUrlForCompare(NCODE_LOCAL_MCP_URL);
 }
 
 /**
- * Ensures the Ncode local PC & shell MCP server exists, is enabled, and speaks
- * Streamable HTTP on 127.0.0.1:3001. User servers are preserved (identity,
- * order, settings); a duplicate local entry (same id or same URL) is merged
- * into the first occurrence instead of being appended twice.
+ * Force-merges the canonical Ncode local PC & shell MCP server into a saved
+ * server list.
+ *
+ * The built-in daemon is never optional: a saved list that disables it, points
+ * it at the wrong transport/URL, or omits it entirely still ends up with one
+ * enabled Streamable HTTP entry on 127.0.0.1:3001. Every user server is
+ * preserved with its own settings and order; duplicate built-in entries (same
+ * id or same URL) collapse into the first occurrence. Pure and idempotent: the
+ * input array is never mutated and re-running the merge returns the same list.
  *
  * @param {unknown} servers
  * @returns {Array<object>}
  */
-export function normalizeNcodeMcpServers(servers) {
+export function forceMergeNcodeDefaultServer(servers) {
     const input = Array.isArray(servers) ? servers : [];
     const result = [];
     let localPlaced = false;
@@ -239,6 +267,17 @@ export function normalizeNcodeMcpServers(servers) {
     }
 
     return result;
+}
+
+/**
+ * Normalizes a stored MCP server list for the settings payload. Same contract
+ * as {@link forceMergeNcodeDefaultServer}; kept as the payload-facing name.
+ *
+ * @param {unknown} servers
+ * @returns {Array<object>}
+ */
+export function normalizeNcodeMcpServers(servers) {
+    return forceMergeNcodeDefaultServer(servers);
 }
 
 export function createDefaultMcpServer(id = createPrefixedId('srv')) {

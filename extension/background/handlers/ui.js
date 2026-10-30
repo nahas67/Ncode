@@ -23,18 +23,29 @@ import {
 } from './ui_sidepanel.js';
 import { handleGetOpenTabs, handleSwitchTab } from './ui_tab_actions.js';
 import { createUiMessageContext } from './ui_context.js';
+import { createNcodeUiActionHandler } from './ui_ncode.js';
 
 export class UIMessageHandler {
-    constructor(imageHandler, controlManager, mcpManager, sidePanelScopeManager, sessionHandler) {
+    // `ncodeDeps` = { goalManager, compactManager, harnessStatus, approvalManager }.
+    constructor(
+        imageHandler,
+        controlManager,
+        mcpManager,
+        sidePanelScopeManager,
+        sessionHandler,
+        ncodeDeps = {}
+    ) {
         this.imageHandler = imageHandler;
         this.controlManager = controlManager;
         this.mcpManager = mcpManager;
         this.sidePanelScopeManager = sidePanelScopeManager;
         this.sessionHandler = sessionHandler;
+        this.handleNcodeAction = createNcodeUiActionHandler({ ...ncodeDeps, sessionHandler });
     }
 
     handle(request, sender, sendResponse) {
         const context = createUiMessageContext(this);
+        if (this.handleNcodeAction(request, sendResponse)) return true;
 
         if (request.action === 'FETCH_IMAGE') {
             handleFetchImage(context, request, sender, sendResponse);

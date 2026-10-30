@@ -174,7 +174,7 @@ describe('NcodeHarnessStatus', () => {
         const harness = new NcodeHarnessStatus({
             mcpManager: {
                 async listToolsForServer(serverId, transport, url) {
-                    expect(serverId).toBe('ncode_local_pc');
+                    expect(serverId).toBe('ncode-pc-daemon');
                     expect(transport).toBe('streamable-http');
                     expect(url).toBe('http://127.0.0.1:3001/mcp');
                     return [{ name: 'pc_exec_shell' }, { name: 'pc_system_info' }];

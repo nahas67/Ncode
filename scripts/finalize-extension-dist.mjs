@@ -23,6 +23,7 @@ const distDir = path.join(extensionDir, 'dist');
 
 const REQUIRED_PATHS = [
     'manifest.json',
+    'logo.png',
     'background/index.js',
     'shared/config/constants.js',
     'services/providers/web.js',
@@ -31,7 +32,9 @@ const REQUIRED_PATHS = [
     'sidepanel/preload.js',
     'sandbox/index.html',
     'settings/index.html',
+    'css/ncode_harness.css',
     'assets',
+    'vendor',
 ];
 
 const FORBIDDEN_RELATIVE_SEGMENTS = ['/node_modules/', '/artifacts/', '/.git/'];

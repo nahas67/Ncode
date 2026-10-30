@@ -1,4 +1,4 @@
-// @ts-check
+﻿// @ts-check
 /**
  * Probe: real compiled background service worker executes a full goal-mode tool
  * loop against the live pc-daemon, with only the remote Gemini Web HTTP surface
@@ -8,6 +8,7 @@
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createChromeMock } from './chrome_mock.mjs';
+import { NCODE_LOCAL_MCP_SERVER_ID } from '../../extension/shared/settings/connection.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..', '..');
@@ -32,7 +33,7 @@ await chrome.storage.local.set({
     geminiMcpServerUrl: DAEMON_URL,
     geminiMcpServers: [
         {
-            id: 'ncode_local_pc',
+            id: NCODE_LOCAL_MCP_SERVER_ID,
             name: 'Ncode Local PC & Shell',
             transport: 'streamable-http',
             url: DAEMON_URL,
@@ -152,7 +153,7 @@ const request = {
     sessionId: SESSION_ID,
     mcpServers: [
         {
-            id: 'ncode_local_pc',
+            id: NCODE_LOCAL_MCP_SERVER_ID,
             name: 'Ncode Local PC & Shell',
             transport: 'streamable-http',
             url: DAEMON_URL,
@@ -164,7 +165,7 @@ const request = {
     ],
     mcpTransport: 'streamable-http',
     mcpServerUrl: DAEMON_URL,
-    mcpServerId: 'ncode_local_pc',
+    mcpServerId: NCODE_LOCAL_MCP_SERVER_ID,
     mcpToolMode: 'all',
     mcpEnabledTools: [],
 };

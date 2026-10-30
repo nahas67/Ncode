@@ -212,4 +212,17 @@ export class UIController {
     updateNcodeCompactionState(state) {
         this.ncodeHarness?.setCompactionState(state);
     }
+
+    updateNcodeApprovalRequest(payload) {
+        this.ncodeHarness?.setApprovalRequest(payload);
+    }
+
+    clearNcodeApprovalRequest() {
+        this.ncodeHarness?.clearApprovalRequest();
+    }
+
+    /** Releases harness timers (poll + compaction) on page teardown. */
+    teardownNcodeHarness() {
+        this.ncodeHarness?.teardown?.();
+    }
 }

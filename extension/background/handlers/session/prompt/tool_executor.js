@@ -2,9 +2,15 @@ import { parseToolCommand } from '../../../../shared/text/tool_call_text.js';
 import { ToolDispatcher } from '../../../control/dispatcher.js';
 
 export class ToolExecutor {
-    constructor(controlManager, mcpManager) {
+    /**
+     * @param {object|null} controlManager
+     * @param {object|null} mcpManager
+     * @param {{ approvalManager?: object|null }} [options]
+     */
+    constructor(controlManager, mcpManager, { approvalManager = null } = {}) {
         this.controlManager = controlManager;
         this.mcpManager = mcpManager;
+        this.approvalManager = approvalManager;
         this.invocationCounter = 0;
     }
 
@@ -67,6 +73,24 @@ export class ToolExecutor {
         let status = 'completed';
 
         try {
+            if (
+                this.approvalManager &&
+                typeof this.approvalManager.requestToolApproval === 'function'
+            ) {
+                const approval = await this.approvalManager.requestToolApproval({
+                    sessionId: request?.sessionId || null,
+                    workflowId: request?.ncodeGoalSession?.workflowId || null,
+                    toolName,
+                    toolArgs: toolCommand.args || {},
+                });
+                if (approval?.required === true && approval.approved !== true) {
+                    throw new Error(
+                        `Tool call '${toolName}' was denied by the user${
+                            approval.reason ? ` (${approval.reason})` : ''
+                        }.`
+                    );
+                }
+            }
             if (ToolDispatcher.isLocalTool(toolName) && request.enableBrowserControl === true) {
                 if (!this.controlManager) {
                     throw new Error('Browser control is unavailable.');

@@ -38,16 +38,22 @@ export class MessageHandler {
     async handle(request) {
         switch (request.action) {
             case 'NCODE_HARNESS_STATUS':
+            case 'NCODE_HARNESS_STATUS_UPDATE':
                 this.ui?.updateNcodeHarnessStatus?.(request);
                 return;
             case 'NCODE_PREAMBLE':
+            case 'NCODE_INTERIM_PREAMBLE':
                 this.ui?.updateNcodePreamble?.(request);
                 return;
             case 'NCODE_GOAL_STATE':
+            case 'NCODE_GOAL_STATE_UPDATE':
                 this.ui?.updateNcodeGoalSession?.(request.goalSession ?? null, request.sessionId);
                 return;
             case 'NCODE_COMPACTION_STATE':
                 this.ui?.updateNcodeCompactionState?.(request);
+                return;
+            case 'NCODE_APPROVAL_REQUEST':
+                this.ui?.updateNcodeApprovalRequest?.(request);
                 return;
             case 'MCP_TEST_RESULT':
                 this.handleMcpTestResult(request);

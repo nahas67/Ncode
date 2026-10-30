@@ -1,0 +1,7 @@
+{
+  "name": "ncode-extension",
+  "version": "1.0.0",
+  "builtAt": "2026-10-30T13:36:30.203Z",
+  "payloadFiles": 374,
+  "sourceArtifact": "extension/artifacts/chrome-extension"
+}

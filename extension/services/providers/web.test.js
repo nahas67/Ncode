@@ -566,4 +566,87 @@ describe('sendWebMessage', () => {
         expect(cancel).toHaveBeenCalledTimes(1);
         expect(releaseLock).toHaveBeenCalledTimes(1);
     });
+
+    it('sends the persisted conversation cursor in the native continuation payload', async () => {
+        global.fetch = vi.fn().mockResolvedValue({
+            ok: true,
+            body: makeStream(buildGeminiLine()),
+        });
+
+        await sendWebMessage(
+            'continue the thread',
+            {
+                atValue: 'at-token',
+                blValue: 'boq_assistant-bard-web-server_20260511.16_p5',
+                fSid: '3956664217185504700',
+                locale: 'zh-CN',
+                authUser: '0',
+                conversationIds: ['conv-1', 'resp-1', 'choice-1'],
+            },
+            '56fdd199312815e2',
+            [],
+            undefined
+        );
+
+        const [, init] = global.fetch.mock.calls[0];
+        const requestPayload = JSON.parse(JSON.parse(init.body.get('f.req'))[1]);
+        expect(requestPayload[2]).toEqual(['conv-1', 'resp-1', 'choice-1']);
+    });
+
+    it('opens a fresh chat when no conversation cursor is supplied and exposes the new ids', async () => {
+        global.fetch = vi.fn().mockResolvedValue({
+            ok: true,
+            body: makeStream(buildGeminiLine()),
+        });
+
+        const response = await sendWebMessage(
+            'hello',
+            {
+                atValue: 'at-token',
+                blValue: 'boq_assistant-bard-web-server_20260511.16_p5',
+                fSid: '3956664217185504700',
+                locale: 'zh-CN',
+                authUser: '0',
+            },
+            '56fdd199312815e2',
+            [],
+            undefined
+        );
+
+        const [, init] = global.fetch.mock.calls[0];
+        const requestPayload = JSON.parse(JSON.parse(init.body.get('f.req'))[1]);
+        expect(requestPayload[2]).toEqual(['', '', '']);
+        expect(response.ids).toEqual(['c_1', 'r_1', 'rc_1']);
+        expect(response.newContext).toMatchObject({
+            atValue: 'at-token',
+            conversationIds: ['c_1', 'r_1', 'rc_1'],
+        });
+        expect(response.newContext).not.toHaveProperty('contextIds');
+    });
+
+    it('normalizes non-string conversation cursor entries to empty continuation slots', async () => {
+        global.fetch = vi.fn().mockResolvedValue({
+            ok: true,
+            body: makeStream(buildGeminiLine()),
+        });
+
+        await sendWebMessage(
+            'hello',
+            {
+                atValue: 'at-token',
+                blValue: 'boq_assistant-bard-web-server_20260511.16_p5',
+                fSid: '3956664217185504700',
+                locale: 'zh-CN',
+                authUser: '0',
+                conversationIds: [null, 'resp-only', undefined],
+            },
+            '56fdd199312815e2',
+            [],
+            undefined
+        );
+
+        const [, init] = global.fetch.mock.calls[0];
+        const requestPayload = JSON.parse(JSON.parse(init.body.get('f.req'))[1]);
+        expect(requestPayload[2]).toEqual(['', 'resp-only', '']);
+    });
 });

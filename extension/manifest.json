@@ -17,7 +17,13 @@
         "downloads",
         "nativeMessaging"
     ],
-    "host_permissions": ["<all_urls>"],
+    "host_permissions": [
+        "<all_urls>",
+        "http://127.0.0.1/*",
+        "http://localhost/*",
+        "ws://127.0.0.1/*",
+        "https://gemini.google.com/*"
+    ],
     "background": {
         "service_worker": "background/index.js",
         "type": "module"
@@ -161,6 +167,12 @@
             "exclude_globs": ["*.mhtml*", "*.mht*", "*.MHTML*", "*.MHT*"],
             "js": ["content/gemini_watermark_bridge.js"],
             "run_at": "document_start"
+        },
+        {
+            "matches": ["https://gemini.google.com/*"],
+            "exclude_globs": ["*.mhtml*", "*.mht*", "*.MHTML*", "*.MHT*"],
+            "js": ["content/gemini_dom_bridge.js"],
+            "run_at": "document_idle"
         },
         {
             "matches": ["https://gemini.google.com/*", "https://business.gemini.google/*"],

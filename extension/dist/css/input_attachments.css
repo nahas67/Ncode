@@ -1,0 +1,98 @@
+.image-preview {
+    display: none;
+    gap: 8px;
+    width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: thin;
+    padding: 0 4px 8px;
+}
+
+.image-preview.has-image {
+    display: flex;
+    animation: fadeIn var(--duration-normal) var(--ease-standard);
+}
+
+.preview-item {
+    position: relative;
+    flex-shrink: 0;
+    width: 64px;
+    height: 64px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-modal);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.preview-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.file-item-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    gap: 4px;
+}
+
+.file-item-card svg {
+    width: 20px;
+    height: 20px;
+    color: var(--text-secondary);
+}
+
+.file-item-card span {
+    font-size: 10px;
+    color: var(--text-primary);
+    max-width: 50px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Always visible enough to tap on touch; fine pointers can still hover-fade. */
+.preview-remove-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--radius-sm);
+    background: rgba(0, 0, 0, 0.5);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    cursor: pointer;
+    border: none;
+    z-index: 10;
+    opacity: 0.92;
+    transition: opacity var(--duration-normal) var(--ease-standard);
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .preview-remove-btn {
+        opacity: 0;
+    }
+
+    .preview-item:hover .preview-remove-btn,
+    .preview-item:focus-within .preview-remove-btn {
+        opacity: 1;
+    }
+}
+
+.preview-remove-btn:hover,
+.preview-remove-btn:focus-visible {
+    background: var(--danger);
+    opacity: 1;
+}

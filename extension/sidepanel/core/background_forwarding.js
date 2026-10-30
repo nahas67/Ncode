@@ -1,3 +1,5 @@
+import { NCODE_ACTIONS } from '../../shared/messaging/ncode_actions.js';
+
 const FORWARDED_RESPONSE_ACTIONS = new Set([
     'FETCH_IMAGE',
     'FETCH_GENERATED_IMAGE',
@@ -6,6 +8,15 @@ const FORWARDED_RESPONSE_ACTIONS = new Set([
     'MCP_TEST_CONNECTION',
     'MCP_LIST_TOOLS',
     'GET_PROVIDER_MODELS',
+    // Ncode harness request acks are forwarded so the sandbox can clear pending
+    // busy state even when the authoritative broadcast arrives separately.
+    NCODE_ACTIONS.GET_HARNESS_STATUS,
+    NCODE_ACTIONS.TRIGGER_COMPACT_RESUME,
+    NCODE_ACTIONS.RESET_GOAL,
+    NCODE_ACTIONS.SUBGOAL_TOGGLE,
+    NCODE_ACTIONS.APPROVAL_RESPONSE,
+    NCODE_ACTIONS.GET_STATE,
+    'NCODE_COMPACT_RESUME',
 ]);
 
 const HOST_ROUTED_ACTIONS = new Set(['GET_OPEN_TABS', 'SWITCH_TAB']);

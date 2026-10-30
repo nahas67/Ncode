@@ -1,0 +1,378 @@
+import { fetchRequestParams } from '../auth.js';
+import { uploadFile } from '../upload.js';
+import { parseGeminiLine } from '../parser.js';
+import {
+    getNonImageAttachments,
+    normalizeUserAttachments,
+} from '../../shared/attachments/index.js';
+import { generateUUID } from '../../shared/utils/index.js';
+import {
+    getSupportedWebModelValues,
+    getWebModelHeaderConfig,
+} from '../../shared/models/web_models.js';
+import {
+    getWebNativeThinkingLevel,
+    normalizeWebThinkingLevelForModel,
+} from '../../shared/models/web_thinking.js';
+import { debugLog } from '../../shared/logging/debug.js';
+import {
+    WEB_CLIENT_CAPABILITIES,
+    assertAuthToken,
+    stripNativeContextIds,
+} from './shared/web_auth.js';
+
+async function handleFileUploads(files, signal, uploadContext) {
+    const normalizedFiles = normalizeUserAttachments(files);
+    if (normalizedFiles.length === 0) return [];
+
+    const nonImageAttachments = getNonImageAttachments(normalizedFiles);
+    if (nonImageAttachments.length > 0) {
+        const names = nonImageAttachments.map((file) => file.name || file.type).join(', ');
+        throw new Error(
+            `Gemini Web Client currently supports image attachments only. Remove non-image files (${names}) or switch to Gemini Official API.`
+        );
+    }
+
+    debugLog(`[Gemini Web] Uploading ${normalizedFiles.length} files...`);
+    const fileList = await Promise.all(
+        normalizedFiles.map((file) =>
+            uploadFile(file, signal, uploadContext).then((url) => [[url], file.name])
+        )
+    );
+    debugLog('[Gemini Web] Files uploaded successfully');
+    return fileList;
+}
+
+/**
+ * Normalizes the Gemini Web conversation cursor triple
+ * `[conversationId, responseId, choiceId]`.
+ *
+ * StreamGenerate requires exactly three string entries; an all-empty triple
+ * opens a brand-new chat. Accepts null/undefined and non-string entries so an
+ * absent cursor (fresh chat) and a persisted one share the same code path.
+ *
+ * @param {unknown} ids
+ * @returns {[string, string, string]}
+ */
+function normalizeConversationIds(ids) {
+    if (!Array.isArray(ids)) return ['', '', ''];
+    return [0, 1, 2].map((index) => (typeof ids[index] === 'string' ? ids[index] : ''));
+}
+
+function constructPayload(prompt, fileList, contextIds, { temporaryChat = false } = {}) {
+    // Structure aligned with Python Gemini-API: [prompt, 0, null, fileList] or [prompt]
+    const messageStruct = fileList.length > 0 ? [prompt, 0, null, fileList] : [prompt];
+
+    const requestPayload = [
+        messageStruct,
+        null,
+        contextIds, // [conversationId, responseId, choiceId]
+    ];
+    if (temporaryChat === true) {
+        // Native Gemini Web sets proto field 46 for temporary chats.
+        requestPayload[45] = true;
+    }
+
+    // The API expects: f.req = JSON.stringify([null, JSON.stringify(requestPayload)])
+    return JSON.stringify([null, JSON.stringify(requestPayload)]);
+}
+
+function buildModelHeader(model, requestId, thinkingLevel, { temporaryChat = false } = {}) {
+    const config = getWebModelHeaderConfig(model);
+    if (!config) {
+        throw new Error(
+            `Unsupported Gemini Web model: ${model}. Supported models: ${getSupportedWebModelValues().join(', ')}`
+        );
+    }
+
+    const header = [];
+    header[0] = 1;
+    header[4] = config.hash;
+    header[7] = temporaryChat === true ? true : 0;
+    header[8] = config.capabilities || WEB_CLIENT_CAPABILITIES;
+    header[11] = config.legacyMode ?? config.mode;
+    header[14] = config.mode;
+    header[15] = getWebNativeThinkingLevel(model, thinkingLevel);
+    header[16] = requestId;
+    return JSON.stringify(header);
+}
+
+function buildEndpoint(authUser, queryParams) {
+    const accountPrefix = authUser && authUser !== '0' ? `/u/${authUser}` : '';
+    return `https://gemini.google.com${accountPrefix}/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?${queryParams.toString()}`;
+}
+
+function assertRequiredAuthTokens(context) {
+    assertAuthToken(context, 'atValue');
+    assertAuthToken(context, 'blValue');
+    assertAuthToken(context, 'fSid');
+}
+
+async function fetchStream(endpoint, atValue, fReq, headers, signal) {
+    // Merge standard mimicry headers
+    const finalHeaders = {
+        ...headers,
+        Origin: 'https://gemini.google.com',
+        Referer: 'https://gemini.google.com/',
+    };
+
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        signal: signal,
+        headers: finalHeaders,
+        credentials: 'include',
+        body: new URLSearchParams({
+            at: atValue,
+            'f.req': fReq,
+        }),
+    });
+
+    if (!response.ok) {
+        throw new Error(`Network Error: ${response.status} ${response.statusText}`);
+    }
+    return response.body.getReader();
+}
+
+/**
+ * Sends a message using the Reverse Engineered Web Client.
+ */
+export async function sendWebMessage(
+    prompt,
+    context,
+    model,
+    files,
+    signal,
+    onUpdate,
+    options = {}
+) {
+    debugLog(`[Gemini Web] Requesting model: ${model}`);
+    const requestId = generateUUID();
+    const normalizedThinkingLevel = normalizeWebThinkingLevelForModel(model, options.thinkingLevel);
+    const temporaryChat = options.temporaryChat === true;
+    const modelHeader = buildModelHeader(model, requestId, normalizedThinkingLevel, {
+        temporaryChat,
+    });
+
+    if (!context || !context.atValue) {
+        // Fallback: This should ideally be handled by SessionManager before calling,
+        // but acts as a safety net.
+        console.warn('[Gemini Web] No context provided, fetching default...');
+        const params = await fetchRequestParams('0');
+        context = {
+            atValue: params.atValue,
+            blValue: params.blValue,
+            fSid: params.fSid,
+            locale: params.locale,
+            authUser: params.authUserIndex || '0',
+            uploadPushId: params.uploadPushId,
+            uploadClientPctx: params.uploadClientPctx,
+        };
+    }
+
+    assertRequiredAuthTokens(context);
+
+    const fileList = await handleFileUploads(files, signal, context);
+
+    // Continue the persisted Gemini Web conversation thread when the caller
+    // supplied the native cursor. The empty triple is a brand-new chat, which
+    // is what Compact & Resume's cursor reset produces on purpose.
+    const conversationIds = normalizeConversationIds(context.conversationIds);
+    const fReq = constructPayload(prompt, fileList, conversationIds, { temporaryChat });
+
+    const queryParams = new URLSearchParams({
+        bl: context.blValue,
+        'f.sid': context.fSid,
+        hl: context.locale || 'en-US',
+        _reqid: String(Math.floor(Math.random() * 900000) + 100000),
+        rt: 'c',
+    });
+
+    const headers = {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        'X-Same-Domain': '1',
+        'x-goog-ext-525001261-jspb': modelHeader,
+        'x-goog-ext-525005358-jspb': JSON.stringify([requestId, 1]),
+        'x-goog-ext-73010989-jspb': '[0]',
+        'x-goog-ext-73010990-jspb': '[0,0,0]',
+    };
+    if (context.authUser && context.authUser !== '0') {
+        headers['X-Goog-AuthUser'] = context.authUser;
+    }
+
+    const endpoint = buildEndpoint(context.authUser, queryParams);
+
+    debugLog(`[Gemini Web] Sending request to ${endpoint}`);
+    const reader = await fetchStream(endpoint, context.atValue, fReq, headers, signal);
+
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let finalResult = null;
+    let isFirstChunk = true;
+    // Set when the reader itself fails. A non-null value means the reply is
+    // truncated rather than complete, so the UI does not treat a cut-off answer
+    // as finished and the caller does not pin conversation continuity to the
+    // (stale) pre-request context.
+    let streamReadError = null;
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+
+            if (isFirstChunk) {
+                if (
+                    chunk.includes('<!DOCTYPE html>') ||
+                    chunk.includes('<html') ||
+                    chunk.includes('Sign in')
+                ) {
+                    throw new Error('未登录 (Session expired)');
+                }
+                isFirstChunk = false;
+            }
+
+            buffer += chunk;
+
+            let newlineIndex;
+            while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+                const line = buffer.slice(0, newlineIndex);
+                buffer = buffer.slice(newlineIndex + 1);
+
+                const parsed = parseGeminiLine(line);
+                if (parsed) {
+                    finalResult = parsed;
+                    if (onUpdate) {
+                        onUpdate(parsed.text, parsed.thoughts);
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        if (error.message.includes('未登录')) throw error;
+        // Mid-stream network error after partial content: do NOT swallow as
+        // success. Record the error so the caller can surface a truncated
+        // reply instead of treating it as a complete one.
+        console.error('Stream reading error:', error);
+        streamReadError = error;
+    } finally {
+        // Always release the reader lock and cancel the underlying fetch so
+        // an aborted or errored stream does not leak the connection.
+        try {
+            await reader.cancel?.()?.catch?.(() => {});
+        } catch {}
+        try {
+            reader.releaseLock?.();
+        } catch {}
+    }
+
+    if (buffer.length > 0) {
+        const parsed = parseGeminiLine(buffer);
+        if (parsed) finalResult = parsed;
+    }
+
+    if (!finalResult) {
+        if (
+            buffer.includes('<!DOCTYPE html>') ||
+            buffer.includes('<html') ||
+            /\bSign in\b/i.test(buffer)
+        ) {
+            throw new Error('未登录 (Session expired)');
+        }
+        // Prefer the real stream failure over a generic empty-parse message so
+        // callers and logs see the underlying network/SW abort reason.
+        if (streamReadError) {
+            throw new Error(
+                `No valid response found. Check network. (stream error: ${streamReadError.message || streamReadError})`
+            );
+        }
+        const sample = buffer.substring(0, 240).replace(/\s+/g, ' ').trim();
+        const hint = classifyEmptyWebResponseBuffer(buffer);
+        debugLog('Invalid response buffer sample:', sample);
+        throw new Error(
+            `No valid response found. Check network. ${hint}${
+                sample ? ` Buffer sample: ${sample}` : ' Empty body.'
+            }`
+        );
+    }
+
+    // If the reader errored mid-stream, the reply is truncated. Surface a
+    // truncated-error result (preserving the partial text the UI already
+    // streamed) instead of returning success — otherwise the caller advances
+    // auth context to the stale pre-request value and the user sees a
+    // cut-off answer with no indication it was incomplete or any retry path.
+    if (streamReadError) {
+        return {
+            text: finalResult.text,
+            thoughts: finalResult.thoughts,
+            images: finalResult.images || [],
+            hasGeneratedImagePlaceholder: finalResult.hasGeneratedImagePlaceholder === true,
+            // Exposed for diagnostics only: a truncated stream never advances the
+            // persisted Web conversation cursor (see request_dispatcher.js).
+            ids: normalizeConversationIds(finalResult.ids),
+            // Do not advance context on a truncated reply — the response RPC
+            // did not complete, so the server-side conversation pointer was
+            // not advanced either. Returning the stale context here would
+            // desync future turns in this conversation.
+            newContext: null,
+            truncated: true,
+            error: streamReadError,
+        };
+    }
+
+    debugLog('[Gemini Web] Request completed successfully');
+
+    const responseIds = normalizeConversationIds(finalResult.ids);
+
+    return {
+        text: finalResult.text,
+        thoughts: finalResult.thoughts,
+        images: finalResult.images || [],
+        hasGeneratedImagePlaceholder: finalResult.hasGeneratedImagePlaceholder === true,
+        // Native three-id continuation cursor for this finished answer, used by
+        // the dispatcher to persist server-side Web conversation continuity.
+        ids: responseIds,
+        newContext: {
+            ...stripNativeContextIds(context),
+            conversationIds: responseIds,
+        },
+    };
+}
+
+/**
+ * Best-effort classification of HTTP-200 StreamGenerate bodies that never
+ * yielded a parseable chat candidate. Keeps the "No valid response found"
+ * prefix so existing retry / error_classifier paths still match.
+ */
+export function classifyEmptyWebResponseBuffer(buffer = '') {
+    const text = String(buffer || '');
+    if (!text.trim()) {
+        return 'Empty stream body (possible rate limit or soft block).';
+    }
+    const lower = text.toLowerCase();
+    if (
+        lower.includes('rate limit') ||
+        lower.includes('too many requests') ||
+        lower.includes('"status":429') ||
+        lower.includes('resource_exhausted')
+    ) {
+        return 'Likely rate-limited empty reply.';
+    }
+    if (
+        lower.includes('permission') ||
+        lower.includes('not available') ||
+        lower.includes('blocked') ||
+        lower.includes('safety')
+    ) {
+        return 'Likely blocked or restricted reply.';
+    }
+    if (lower.includes('error') || lower.includes('exception')) {
+        return 'Server returned an error-shaped payload without chat text.';
+    }
+    // Common Bard RPC pattern: length-prefix lines + wrb.fr metadata only.
+    if (/^\d+\s*\[/.test(text.trim()) || text.includes('wrb.fr')) {
+        return 'RPC metadata received but no chat candidate parsed (protocol or account issue).';
+    }
+    return 'Response body was not a valid Gemini chat stream.';
+}

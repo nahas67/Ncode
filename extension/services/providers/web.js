@@ -43,6 +43,22 @@ async function handleFileUploads(files, signal, uploadContext) {
     return fileList;
 }
 
+/**
+ * Normalizes the Gemini Web conversation cursor triple
+ * `[conversationId, responseId, choiceId]`.
+ *
+ * StreamGenerate requires exactly three string entries; an all-empty triple
+ * opens a brand-new chat. Accepts null/undefined and non-string entries so an
+ * absent cursor (fresh chat) and a persisted one share the same code path.
+ *
+ * @param {unknown} ids
+ * @returns {[string, string, string]}
+ */
+function normalizeConversationIds(ids) {
+    if (!Array.isArray(ids)) return ['', '', ''];
+    return [0, 1, 2].map((index) => (typeof ids[index] === 'string' ? ids[index] : ''));
+}
+
 function constructPayload(prompt, fileList, contextIds, { temporaryChat = false } = {}) {
     // Structure aligned with Python Gemini-API: [prompt, 0, null, fileList] or [prompt]
     const messageStruct = fileList.length > 0 ? [prompt, 0, null, fileList] : [prompt];
@@ -157,9 +173,11 @@ export async function sendWebMessage(
 
     const fileList = await handleFileUploads(files, signal, context);
 
-    // Current Gemini Web rejects the legacy three-id continuation payload without
-    // the extra UI-only context token, so Web continuity is handled by the caller.
-    const fReq = constructPayload(prompt, fileList, ['', '', ''], { temporaryChat });
+    // Continue the persisted Gemini Web conversation thread when the caller
+    // supplied the native cursor. The empty triple is a brand-new chat, which
+    // is what Compact & Resume's cursor reset produces on purpose.
+    const conversationIds = normalizeConversationIds(context.conversationIds);
+    const fReq = constructPayload(prompt, fileList, conversationIds, { temporaryChat });
 
     const queryParams = new URLSearchParams({
         bl: context.blValue,
@@ -290,6 +308,9 @@ export async function sendWebMessage(
             thoughts: finalResult.thoughts,
             images: finalResult.images || [],
             hasGeneratedImagePlaceholder: finalResult.hasGeneratedImagePlaceholder === true,
+            // Exposed for diagnostics only: a truncated stream never advances the
+            // persisted Web conversation cursor (see request_dispatcher.js).
+            ids: normalizeConversationIds(finalResult.ids),
             // Do not advance context on a truncated reply — the response RPC
             // did not complete, so the server-side conversation pointer was
             // not advanced either. Returning the stale context here would
@@ -302,12 +323,20 @@ export async function sendWebMessage(
 
     debugLog('[Gemini Web] Request completed successfully');
 
+    const responseIds = normalizeConversationIds(finalResult.ids);
+
     return {
         text: finalResult.text,
         thoughts: finalResult.thoughts,
         images: finalResult.images || [],
         hasGeneratedImagePlaceholder: finalResult.hasGeneratedImagePlaceholder === true,
-        newContext: stripNativeContextIds(context),
+        // Native three-id continuation cursor for this finished answer, used by
+        // the dispatcher to persist server-side Web conversation continuity.
+        ids: responseIds,
+        newContext: {
+            ...stripNativeContextIds(context),
+            conversationIds: responseIds,
+        },
     };
 }
 

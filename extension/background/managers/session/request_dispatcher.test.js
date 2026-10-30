@@ -3,7 +3,12 @@ import { sendOfficialMessage } from '../../../services/providers/official.js';
 import { sendOpenAIMessage } from '../../../services/providers/openai_compatible.js';
 import { sendAnthropicMessage } from '../../../services/providers/anthropic.js';
 import { sendWebMessage } from '../../../services/providers/web.js';
-import { prepareManagedContext } from './context_manager.js';
+import { sendPromptViaGeminiDom } from '../../../services/providers/web_dom.js';
+import {
+    getWebConversationCursor,
+    prepareManagedContext,
+    updateWebConversationCursor,
+} from './context_manager.js';
 import { getHistory } from './history_store.js';
 import { RequestDispatcher } from './request_dispatcher.js';
 
@@ -23,6 +28,10 @@ vi.mock('../../../services/providers/web.js', () => ({
     sendWebMessage: vi.fn(),
 }));
 
+vi.mock('../../../services/providers/web_dom.js', () => ({
+    sendPromptViaGeminiDom: vi.fn(),
+}));
+
 vi.mock('./history_store.js', () => ({
     getHistory: vi.fn(async () => []),
 }));
@@ -32,7 +41,42 @@ vi.mock('./context_manager.js', () => ({
         history: [],
         systemInstruction: 'system',
     })),
+    getWebConversationCursor: vi.fn(async () => ({
+        conversationId: null,
+        responseId: null,
+        choiceId: null,
+    })),
+    updateWebConversationCursor: vi.fn(async () => ({
+        conversationId: null,
+        responseId: null,
+        choiceId: null,
+    })),
+    toWebConversationIds: vi.fn((cursor) => [
+        cursor?.conversationId || '',
+        cursor?.responseId || '',
+        cursor?.choiceId || '',
+    ]),
 }));
+
+/**
+ * AuthManager stand-in for Web-mode dispatch tests.
+ */
+function createWebAuthMock() {
+    const context = {
+        atValue: 'at-token',
+        blValue: 'bl-token',
+        fSid: 'fsid-token',
+        locale: 'en-US',
+        authUser: '0',
+    };
+    return {
+        accountIndices: [0],
+        getOrFetchContext: vi.fn(async () => context),
+        updateContext: vi.fn(),
+        forceContextRefresh: vi.fn(),
+        rotateAccount: vi.fn(),
+    };
+}
 
 describe('RequestDispatcher response mapping', () => {
     beforeEach(() => {
@@ -43,6 +87,24 @@ describe('RequestDispatcher response mapping', () => {
                 sendMessage: vi.fn(() => Promise.resolve()),
             },
         };
+        // Every existing Web test predates Mode B: default the live-DOM
+        // fallback to "unavailable" unless a test opts into it, so unrelated
+        // assertions keep seeing only the Mode A failure.
+        sendPromptViaGeminiDom.mockReset();
+        sendPromptViaGeminiDom.mockRejectedValue(
+            new Error('Gemini DOM bridge unavailable in this test.')
+        );
+        // Default: no persisted Web conversation cursor (a fresh chat).
+        getWebConversationCursor.mockResolvedValue({
+            conversationId: null,
+            responseId: null,
+            choiceId: null,
+        });
+        updateWebConversationCursor.mockResolvedValue({
+            conversationId: null,
+            responseId: null,
+            choiceId: null,
+        });
     });
 
     afterEach(() => {
@@ -1437,7 +1499,10 @@ describe('RequestDispatcher response mapping', () => {
         );
         expect(auth.forceContextRefresh).toHaveBeenCalledTimes(1);
         expect(auth.getOrFetchContext).toHaveBeenCalledTimes(2);
-        expect(sendWebMessage.mock.calls[1][1]).toEqual(freshContext);
+        // The retried request keeps the persisted conversation cursor (empty
+        // here because no cursor is stored) alongside the fresh auth tokens.
+        expect(sendWebMessage.mock.calls[1][1]).toMatchObject(freshContext);
+        expect(sendWebMessage.mock.calls[1][1].conversationIds).toEqual(['', '', '']);
     });
 
     it('does not retry when Gemini Web request tokens are unavailable', async () => {
@@ -1532,5 +1597,242 @@ describe('RequestDispatcher response mapping', () => {
         ).rejects.toThrow('API Error (400): Bad Request');
 
         expect(sendOfficialMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to the Gemini live-DOM bridge when StreamGenerate returns no valid response', async () => {
+        vi.useFakeTimers();
+        vi.spyOn(Math, 'random').mockReturnValue(0);
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        getHistory.mockResolvedValue([]);
+
+        sendWebMessage.mockRejectedValue(
+            new Error('No valid response found. Check network. Empty stream body.')
+        );
+        sendPromptViaGeminiDom.mockResolvedValue({
+            text: 'DOM fallback answer',
+            thoughts: null,
+            mode: { model: 'Gemini 3 Pro', extendedThinking: false },
+            tabId: 4,
+            createdTab: false,
+        });
+        const dispatcher = new RequestDispatcher(createWebAuthMock());
+        const onUpdate = vi.fn();
+
+        const resultPromise = dispatcher.dispatch(
+            { text: 'hello', model: 'gemini-web', sessionId: 'session-web' },
+            { provider: 'web' },
+            [],
+            onUpdate,
+            null
+        );
+
+        // Exhaust all three Mode A attempts (2s then 4s backoff), then Mode B.
+        await vi.waitFor(() => expect(sendWebMessage).toHaveBeenCalledTimes(1));
+        await vi.advanceTimersByTimeAsync(2000);
+        await vi.waitFor(() => expect(sendWebMessage).toHaveBeenCalledTimes(2));
+        await vi.advanceTimersByTimeAsync(4000);
+
+        await expect(resultPromise).resolves.toEqual({
+            action: 'GEMINI_REPLY',
+            sessionId: 'session-web',
+            text: 'DOM fallback answer',
+            thoughts: null,
+            sources: [],
+            images: [],
+            status: 'success',
+            context: null,
+            webMode: 'dom',
+        });
+        expect(sendWebMessage).toHaveBeenCalledTimes(3);
+        expect(sendPromptViaGeminiDom).toHaveBeenCalledTimes(1);
+        expect(sendPromptViaGeminiDom).toHaveBeenCalledWith({
+            prompt: 'hello',
+            signal: null,
+            onUpdate: expect.any(Function),
+        });
+
+        // Deltas from the live DOM bridge are forwarded through the original
+        // onUpdate so the sidepanel keeps rendering the streamed answer.
+        const domOptions = sendPromptViaGeminiDom.mock.calls[0][0];
+        domOptions.onUpdate('partial answer', null);
+        expect(onUpdate).toHaveBeenCalledWith('partial answer', null);
+    });
+
+    it('falls back immediately when the Web session is expired', async () => {
+        getHistory.mockResolvedValue([]);
+        sendWebMessage.mockRejectedValue(new Error('未登录 (Session expired)'));
+        sendPromptViaGeminiDom.mockResolvedValue({
+            text: 'session recovered through the tab',
+            thoughts: null,
+            mode: null,
+            tabId: 5,
+            createdTab: false,
+        });
+        const dispatcher = new RequestDispatcher(createWebAuthMock());
+        const onUpdate = vi.fn();
+
+        await expect(
+            dispatcher.dispatch(
+                { text: 'hello', model: 'gemini-web', sessionId: 'session-web' },
+                { provider: 'web' },
+                [],
+                onUpdate,
+                null
+            )
+        ).resolves.toEqual({
+            action: 'GEMINI_REPLY',
+            sessionId: 'session-web',
+            text: 'session recovered through the tab',
+            thoughts: null,
+            sources: [],
+            images: [],
+            status: 'success',
+            context: null,
+            webMode: 'dom',
+        });
+
+        // Unrecoverable auth errors must not be retried in Mode A.
+        expect(sendWebMessage).toHaveBeenCalledTimes(1);
+        expect(sendPromptViaGeminiDom).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws a combined error naming both modes when the live-DOM fallback also fails', async () => {
+        getHistory.mockResolvedValue([]);
+        sendWebMessage.mockRejectedValue(new Error('Missing Gemini Web auth token: blValue'));
+        sendPromptViaGeminiDom.mockRejectedValue(
+            new Error('Gemini DOM bridge is unavailable: chrome.tabs is not available.')
+        );
+        const dispatcher = new RequestDispatcher(createWebAuthMock());
+
+        await expect(
+            dispatcher.dispatch(
+                { text: 'hello', model: 'gemini-web', sessionId: 'session-web' },
+                { provider: 'web' },
+                [],
+                vi.fn(),
+                null
+            )
+        ).rejects.toThrow(
+            /Gemini Web request failed in both modes[\s\S]*Mode A \(StreamGenerate\): Missing Gemini Web auth token: blValue[\s\S]*Mode B \(live DOM bridge\): Gemini DOM bridge is unavailable/
+        );
+        expect(sendPromptViaGeminiDom).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not invoke the live-DOM fallback for non-auth validation errors', async () => {
+        getHistory.mockResolvedValue([]);
+        sendWebMessage.mockRejectedValue(
+            new Error('Unsupported Gemini Web model: gemini-unknown. Supported models: none')
+        );
+        const dispatcher = new RequestDispatcher(createWebAuthMock());
+
+        await expect(
+            dispatcher.dispatch(
+                { text: 'hello', model: 'gemini-unknown', sessionId: 'session-web' },
+                { provider: 'web' },
+                [],
+                vi.fn(),
+                null
+            )
+        ).rejects.toThrow('Unsupported Gemini Web model: gemini-unknown');
+        expect(sendPromptViaGeminiDom).not.toHaveBeenCalled();
+    });
+
+    it('passes the persisted Gemini Web conversation cursor to the provider', async () => {
+        getHistory.mockResolvedValue([]);
+        getWebConversationCursor.mockResolvedValue({
+            conversationId: 'conv-1',
+            responseId: 'resp-1',
+            choiceId: 'choice-1',
+        });
+        sendWebMessage.mockResolvedValue({
+            text: 'web text',
+            thoughts: null,
+            images: [],
+            ids: ['conv-2', 'resp-2', 'choice-2'],
+            newContext: { atValue: 'new-at-token' },
+        });
+        const dispatcher = new RequestDispatcher(createWebAuthMock());
+
+        await dispatcher.dispatch(
+            { text: 'hello', model: 'gemini-web', sessionId: 'session-web' },
+            { provider: 'web' },
+            [],
+            vi.fn(),
+            null
+        );
+
+        expect(sendWebMessage.mock.calls[0][1]).toMatchObject({
+            conversationIds: ['conv-1', 'resp-1', 'choice-1'],
+        });
+    });
+
+    it('persists the new Gemini Web conversation cursor after a successful reply', async () => {
+        getHistory.mockResolvedValue([]);
+        sendWebMessage.mockResolvedValue({
+            text: 'web text',
+            thoughts: null,
+            images: [],
+            ids: ['conv-2', 'resp-2', 'choice-2'],
+            newContext: {
+                atValue: 'new-at-token',
+                conversationIds: ['conv-2', 'resp-2', 'choice-2'],
+            },
+        });
+        const dispatcher = new RequestDispatcher(createWebAuthMock());
+
+        await dispatcher.dispatch(
+            { text: 'hello', model: 'gemini-web', sessionId: 'session-web' },
+            { provider: 'web' },
+            [],
+            vi.fn(),
+            null
+        );
+
+        expect(updateWebConversationCursor).toHaveBeenCalledWith(['conv-2', 'resp-2', 'choice-2']);
+    });
+
+    it('resets the conversation cursor when a reply carries no ids', async () => {
+        getHistory.mockResolvedValue([]);
+        sendWebMessage.mockResolvedValue({
+            text: 'web text',
+            thoughts: null,
+            images: [],
+            newContext: { atValue: 'new-at-token' },
+        });
+        const dispatcher = new RequestDispatcher(createWebAuthMock());
+
+        await dispatcher.dispatch(
+            { text: 'hello', model: 'gemini-web', sessionId: 'session-web' },
+            { provider: 'web' },
+            [],
+            vi.fn(),
+            null
+        );
+
+        expect(updateWebConversationCursor).toHaveBeenCalledWith(null);
+    });
+
+    it('does not advance the conversation cursor for a truncated reply', async () => {
+        getHistory.mockResolvedValue([]);
+        sendWebMessage.mockResolvedValue({
+            text: 'partial answer',
+            thoughts: null,
+            images: [],
+            ids: ['conv-3', 'resp-3', 'choice-3'],
+            newContext: null,
+            truncated: true,
+        });
+        const dispatcher = new RequestDispatcher(createWebAuthMock());
+
+        await expect(
+            dispatcher.dispatch(
+                { text: 'hello', model: 'gemini-web', sessionId: 'session-web' },
+                { provider: 'web' },
+                [],
+                vi.fn(),
+                null
+            )
+        ).rejects.toThrow(/truncated/i);
+        expect(updateWebConversationCursor).not.toHaveBeenCalled();
     });
 });

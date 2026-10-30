@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     CONNECTION_STORAGE_KEYS,
+    NCODE_DEFAULT_MCP_SERVER,
     NCODE_LOCAL_MCP_SERVER_ID,
     NCODE_LOCAL_MCP_SERVER_NAME,
     NCODE_LOCAL_MCP_URL,
@@ -8,6 +9,7 @@ import {
     createConnectionStorageUpdate,
     createDefaultMcpServer,
     createDefaultNcodeMcpServer,
+    forceMergeNcodeDefaultServer,
     getConnectionProvider,
     getDefaultMcpUrlForTransport,
     getSelectedModelForProvider,
@@ -19,8 +21,9 @@ const expectedLocalMcpServer = {
     name: NCODE_LOCAL_MCP_SERVER_NAME,
     transport: 'streamable-http',
     url: NCODE_LOCAL_MCP_URL,
-    headers: {},
     enabled: true,
+    autoConnect: true,
+    headers: {},
     toolMode: 'all',
     enabledTools: [],
 };
@@ -287,5 +290,90 @@ describe('connection settings helpers', () => {
 
         expect(server.id).toMatch(/^srv_[A-Z0-9-]+$/);
         expect(server.id).not.toMatch(/^srv_\d+$/);
+    });
+});
+
+describe('forceMergeNcodeDefaultServer', () => {
+    it('exposes the canonical built-in daemon server constant', () => {
+        expect(NCODE_DEFAULT_MCP_SERVER).toEqual({
+            id: NCODE_LOCAL_MCP_SERVER_ID,
+            name: 'Ncode Local PC & Shell',
+            transport: 'streamable-http',
+            url: 'http://127.0.0.1:3001/mcp',
+            enabled: true,
+            autoConnect: true,
+        });
+        expect(Object.isFrozen(NCODE_DEFAULT_MCP_SERVER)).toBe(true);
+    });
+
+    it('adds an enabled built-in daemon when the saved list is empty or missing', () => {
+        expect(forceMergeNcodeDefaultServer([])).toEqual([expectedLocalMcpServer]);
+        expect(forceMergeNcodeDefaultServer(undefined)).toEqual([expectedLocalMcpServer]);
+        expect(forceMergeNcodeDefaultServer(null)).toEqual([expectedLocalMcpServer]);
+        expect(forceMergeNcodeDefaultServer('not-a-list')).toEqual([expectedLocalMcpServer]);
+    });
+
+    it('force-enables a disabled/stale saved daemon and preserves user servers', () => {
+        const userServer = { id: 'srv-a', url: 'http://user-a/mcp', enabled: false };
+        const merged = forceMergeNcodeDefaultServer([
+            userServer,
+            {
+                id: NCODE_LOCAL_MCP_SERVER_ID,
+                name: 'Renamed locally',
+                transport: 'sse',
+                url: 'http://127.0.0.1:3001/sse',
+                enabled: false,
+                autoConnect: false,
+                toolMode: 'selected',
+                enabledTools: ['pc_exec_shell'],
+            },
+            { id: 'srv-b', url: 'http://user-b/mcp' },
+        ]);
+
+        expect(merged.map((server) => server.id)).toEqual([
+            'srv-a',
+            NCODE_LOCAL_MCP_SERVER_ID,
+            'srv-b',
+        ]);
+        expect(merged[1]).toEqual({
+            ...expectedLocalMcpServer,
+            toolMode: 'selected',
+            enabledTools: ['pc_exec_shell'],
+        });
+        expect(merged[1].enabled).toBe(true);
+        expect(merged[1].autoConnect).toBe(true);
+        expect(merged[0]).toEqual(userServer);
+    });
+
+    it('collapses duplicate built-in entries (id or URL) into one', () => {
+        const merged = forceMergeNcodeDefaultServer([
+            { id: NCODE_LOCAL_MCP_SERVER_ID, url: NCODE_LOCAL_MCP_URL, enabled: false },
+            { id: 'srv-x', url: 'http://x/mcp' },
+            { id: 'custom', url: 'http://127.0.0.1:3001/mcp/' },
+            {
+                id: NCODE_LOCAL_MCP_SERVER_ID,
+                transport: 'ws',
+                url: 'ws://127.0.0.1:3001/mcp',
+                enabled: true,
+            },
+        ]);
+
+        expect(merged).toEqual([expectedLocalMcpServer, { id: 'srv-x', url: 'http://x/mcp' }]);
+        expect(merged.filter((server) => server.id === NCODE_LOCAL_MCP_SERVER_ID)).toHaveLength(1);
+    });
+
+    it('is pure and idempotent', () => {
+        const input = [
+            { id: 'srv-a', url: 'http://user-a/mcp', headers: { Authorization: 'Bearer a' } },
+            { id: NCODE_LOCAL_MCP_SERVER_ID, url: NCODE_LOCAL_MCP_URL, enabled: false },
+        ];
+        const snapshot = JSON.parse(JSON.stringify(input));
+
+        const merged = forceMergeNcodeDefaultServer(input);
+        expect(input).toEqual(snapshot);
+
+        const mergedAgain = forceMergeNcodeDefaultServer(merged);
+        expect(mergedAgain).toEqual(merged);
+        expect(mergedAgain[0]).not.toBe(merged[0]);
     });
 });

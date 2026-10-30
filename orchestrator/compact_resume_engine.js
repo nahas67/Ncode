@@ -638,9 +638,24 @@ export function parseCompactionSummary(modelText) {
         modifiedFilesAndCommands: coerceStringList(pickField(parsed, 'modifiedFilesAndCommands')),
         discoveredFactsAndErrors: coerceStringList(pickField(parsed, 'discoveredFactsAndErrors')),
         nextImmediateAction: coerceActionText(pickField(parsed, 'nextImmediateAction')),
+        // Canonical Phase-4 checkpoint fields; accepted directly when the model
+        // (or a future compaction prompt) already emits them.
+        pendingSubgoals: coerceStringList(pickField(parsed, 'pendingSubgoals')),
+        modifiedFiles: coerceStringList(pickField(parsed, 'modifiedFiles')),
+        currentCwd: coerceActionText(pickField(parsed, 'currentCwd')),
+        keyFindings: coerceStringList(pickField(parsed, 'keyFindings')),
+        nextStep: coerceActionText(pickField(parsed, 'nextStep')),
     };
     if (!summary.nextImmediateAction) {
-        summary.nextImmediateAction = extractNextActionFromText(text);
+        summary.nextImmediateAction =
+            summary.nextStep || extractNextActionFromText(text);
+    }
+    if (!summary.nextStep) summary.nextStep = summary.nextImmediateAction;
+    if (summary.keyFindings.length === 0) {
+        summary.keyFindings = summary.discoveredFactsAndErrors;
+    }
+    if (summary.discoveredFactsAndErrors.length === 0) {
+        summary.discoveredFactsAndErrors = summary.keyFindings;
     }
     return { ...summary, parseError };
 }
@@ -649,12 +664,84 @@ export function parseCompactionSummary(modelText) {
 
 function normalizeSummary(summary) {
     const source = isPlainObject(summary) ? summary : {};
+    const modifiedFilesAndCommands = coerceStringList(
+        pickField(source, 'modifiedFilesAndCommands')
+    );
+    const discoveredFactsAndErrors = coerceStringList(
+        pickField(source, 'discoveredFactsAndErrors')
+    );
+    const keyFindings = coerceStringList(pickField(source, 'keyFindings'));
+    const nextImmediateAction = coerceActionText(pickField(source, 'nextImmediateAction'));
+    const nextStep = coerceActionText(pickField(source, 'nextStep'));
+    const modifiedFiles = coerceStringList(pickField(source, 'modifiedFiles'));
+    const pendingSubgoals = coerceStringList(pickField(source, 'pendingSubgoals'));
+    const currentCwdValue = pickField(source, 'currentCwd');
+    const currentCwd = typeof currentCwdValue === 'string' ? currentCwdValue.trim() : '';
     return {
         completedSubgoals: coerceStringList(pickField(source, 'completedSubgoals')),
-        modifiedFilesAndCommands: coerceStringList(pickField(source, 'modifiedFilesAndCommands')),
-        discoveredFactsAndErrors: coerceStringList(pickField(source, 'discoveredFactsAndErrors')),
-        nextImmediateAction: coerceActionText(pickField(source, 'nextImmediateAction')),
+        modifiedFilesAndCommands,
+        discoveredFactsAndErrors: discoveredFactsAndErrors.length
+            ? discoveredFactsAndErrors
+            : keyFindings,
+        nextImmediateAction: nextImmediateAction || nextStep,
+        // Canonical Ncode checkpoint fields (Phase 4). Derived from the model
+        // summary when present, otherwise from the legacy field names above so
+        // older checkpoints remain renderable.
+        pendingSubgoals,
+        modifiedFiles: modifiedFiles.length
+            ? modifiedFiles
+            : deriveModifiedFiles(modifiedFilesAndCommands),
+        currentCwd,
+        keyFindings: keyFindings.length ? keyFindings : discoveredFactsAndErrors,
+        nextStep: nextStep || nextImmediateAction,
     };
+}
+
+/**
+ * Extracts file-path-looking entries from `modifiedFilesAndCommands` rows.
+ * Rows are usually "path — what changed" or "npm test (passed)"; only the
+ * former contributes a modified file.
+ *
+ * @param {string[]} entries
+ * @returns {string[]}
+ */
+function deriveModifiedFiles(entries) {
+    const files = [];
+    for (const entry of Array.isArray(entries) ? entries : []) {
+        if (typeof entry !== 'string') continue;
+        const head = entry.split(/\s+(?:—|-|:)\s+/)[0]?.trim() || '';
+        const candidate = head.split(/\s+/)[0] || '';
+        if (!candidate) continue;
+        const looksLikePath = /[\\/]/.test(candidate) || /^[\w.-]+\.[A-Za-z0-9]{1,8}$/.test(candidate);
+        if (looksLikePath && !files.includes(candidate)) files.push(candidate);
+    }
+    return files;
+}
+
+/**
+ * Derives the still-pending subgoal list from a goal-session snapshot.
+ *
+ * @param {Record<string, unknown>|null} goalSession
+ * @returns {string[]}
+ */
+function derivePendingSubgoals(goalSession) {
+    if (!isPlainObject(goalSession) || !Array.isArray(goalSession.subgoals)) return [];
+    const pending = [];
+    for (const subgoal of goalSession.subgoals) {
+        if (!isPlainObject(subgoal)) continue;
+        const status = typeof subgoal.status === 'string' ? subgoal.status : 'pending';
+        if (status === 'done' || status === 'completed') continue;
+        const title =
+            typeof subgoal.title === 'string' && subgoal.title.trim()
+                ? subgoal.title.trim()
+                : typeof subgoal.id === 'string'
+                  ? subgoal.id
+                  : '';
+        if (!title) continue;
+        const id = typeof subgoal.id === 'string' && subgoal.id ? subgoal.id : title;
+        pending.push(`${id}: ${title}`);
+    }
+    return pending;
 }
 
 function nextCheckpointId(workflowId, createdAt) {
@@ -715,6 +802,13 @@ export function createCheckpoint(input = {}) {
         typeof input.sessionId === 'string' && input.sessionId.trim()
             ? input.sessionId.trim()
             : null;
+    const pendingSubgoals = summary.pendingSubgoals.length
+        ? summary.pendingSubgoals
+        : derivePendingSubgoals(goalSession);
+    const currentCwd =
+        typeof input.currentCwd === 'string' && input.currentCwd.trim()
+            ? input.currentCwd.trim()
+            : summary.currentCwd;
 
     return {
         workflowId,
@@ -725,6 +819,11 @@ export function createCheckpoint(input = {}) {
         sessionId,
         goalSession,
         ...summary,
+        pendingSubgoals,
+        currentCwd,
+        keyFindings: summary.keyFindings,
+        nextStep: summary.nextStep,
+        modifiedFiles: summary.modifiedFiles,
         prunedChars: toNonNegativeNumber(input.prunedChars),
         contextChars: toNonNegativeNumber(stats.chars),
         approxTokens: toNonNegativeNumber(stats.approxTokens),
@@ -794,17 +893,32 @@ Checkpoint version: ${toNonNegativeNumber(checkpoint.version)}
 
 ${formatBulletList(summary.completedSubgoals, 'No subgoal was reported complete.')}
 
-## Modified files and commands
+## Pending subgoals
+
+${formatBulletList(
+    summary.pendingSubgoals.length ? summary.pendingSubgoals : derivePendingSubgoals(checkpoint.goalSession),
+    'No pending subgoal is recorded; verify completion before finishing.'
+)}
+
+## Modified files
+
+${formatBulletList(summary.modifiedFiles, 'No file change was recorded.')}
+
+## Files and commands touched
 
 ${formatBulletList(summary.modifiedFilesAndCommands, 'No file change or command was recorded.')}
 
-## Discovered facts and errors
+## Current working directory
 
-${formatBulletList(summary.discoveredFactsAndErrors, 'No new fact or error was recorded.')}
+${summary.currentCwd || 'unknown (re-check with pc_shell_session / pc_system_info before running more commands)'}
 
-## Next immediate action
+## Key findings
 
-${summary.nextImmediateAction || 'No immediate action was recorded; resume the next pending subgoal.'}
+${formatBulletList(summary.keyFindings, 'No new fact or error was recorded.')}
+
+## Next step
+
+${summary.nextStep || 'No immediate action was recorded; resume the next pending subgoal.'}
 
 ${goalDirective}
 

@@ -52,6 +52,13 @@ import {
     pruneHistory,
 } from './compact_resume_engine.js';
 
+import {
+    DEFAULT_MAX_ITERATIONS as ROUTER_DEFAULT_MAX_ITERATIONS,
+    GOAL_COMPLETE_TAG,
+    GOAL_PLAN_TAG,
+    SubagentRouter,
+} from './subagent_router.js';
+
 const failures = [];
 let passed = 0;
 
@@ -1059,6 +1066,126 @@ await test('compactAndResume rejects an invalid goal session or message list', (
         () => compactAndResume({ goalSession: makeSession(), messages: 'nope' }),
         TypeError
     );
+});
+
+// Four-role subagent router
+
+function makeRouterPlan() {
+    return [
+        { id: 'inspect', title: 'Inspect the repository', role: 'planner', dependsOn: [] },
+        {
+            id: 'patch',
+            title: 'Patch the module',
+            role: 'pc_coder',
+            dependsOn: ['inspect'],
+            successCriteria: 'node --check exits 0',
+        },
+        { id: 'verify', title: 'Verify the result', role: 'verifier', dependsOn: ['patch'] },
+    ];
+}
+
+async function makeRoutedSession(router) {
+    let session = router.createGoalSession({
+        workflowId: 'wf-smoke-router',
+        rootGoal: 'Route the smoke test through four roles.',
+    });
+    const planned = router.plan(
+        `<${GOAL_PLAN_TAG}>${JSON.stringify(makeRouterPlan())}</${GOAL_PLAN_TAG}>`
+    );
+    assert.equal(planned.ok, true, planned.errors.join(' '));
+    session = router.applyPlan(session, planned.nodes);
+    return session;
+}
+
+await test('subagent router plans a DAG and schedules ready nodes in order', async () => {
+    const router = new SubagentRouter();
+    const session = await makeRoutedSession(router);
+    assert.equal(ROUTER_DEFAULT_MAX_ITERATIONS, 30);
+    assert.deepEqual(
+        session.subgoals.map((subgoal) => subgoal.id),
+        ['inspect', 'patch', 'verify']
+    );
+    assert.equal(router.nextSubgoal(session).id, 'inspect');
+    const blocked = router.applySubgoalResult(session, { subgoalId: 'verify', status: 'running' });
+    assert.equal(blocked.accepted, false);
+    includes(blocked.reasons.join(' '), 'dependencies_not_done:patch');
+});
+
+await test('subagent router verifier refuses unproven completion and accepts evidence', async () => {
+    const router = new SubagentRouter();
+    let session = await makeRoutedSession(router);
+    const unproven = router.completionGate(session, { complete: true });
+    assert.equal(unproven.allowed, false);
+    includes(unproven.reasons.join(' '), 'subgoals_not_done');
+
+    session = router.applySubgoalResult(session, {
+        subgoalId: 'inspect',
+        status: 'done',
+        evidence: 'repository mapped',
+    }).goalSession;
+    const refusedEvidence = router.applySubgoalResult(session, {
+        subgoalId: 'patch',
+        status: 'done',
+        evidence: 'trust me, it works',
+    });
+    assert.equal(refusedEvidence.accepted, false);
+    includes(refusedEvidence.reasons.join(' '), 'unstructured_pc_evidence');
+
+    session = router.applySubgoalResult(session, {
+        subgoalId: 'patch',
+        status: 'done',
+        evidence: {
+            summary: 'Tests pass',
+            command: 'node --check orchestrator/subagent_router.js',
+            exitCode: 0,
+            changedFiles: ['orchestrator/subagent_router.js'],
+            gitDiff: '+routed',
+        },
+    }).goalSession;
+    session = router.applySubgoalResult(session, {
+        subgoalId: 'verify',
+        status: 'done',
+        evidence: 'exit code and diff checked',
+    }).goalSession;
+
+    const noTag = router.completionGate(session);
+    assert.deepEqual(noTag.reasons, ['missing_completion_tag']);
+    const gate = router.completionGate(session, {
+        modelText: `Done.\n<${GOAL_COMPLETE_TAG}>true</${GOAL_COMPLETE_TAG}>`,
+    });
+    assert.equal(gate.allowed, true);
+    assert.equal(gate.completionTag, `<${GOAL_COMPLETE_TAG}>true</${GOAL_COMPLETE_TAG}>`);
+    const marked = router.markGoalComplete(session, { complete: true });
+    assert.equal(marked.goalSession.status, 'completed');
+    assert.equal(marked.goalSession.completionMarked, true);
+});
+
+await test('subagent router harness snapshot matches the goal-session contract', async () => {
+    const router = new SubagentRouter();
+    const session = await makeRoutedSession(router);
+    const snapshot = router.toHarnessSnapshot(session);
+    assert.deepEqual(Object.keys(snapshot), [
+        'workflowId',
+        'rootGoal',
+        'subgoals',
+        'iterationCount',
+        'maxIterations',
+        'status',
+        'completionMarked',
+        'createdAt',
+        'updatedAt',
+    ]);
+    assert.deepEqual(Object.keys(snapshot.subgoals[0]), [
+        'id',
+        'title',
+        'role',
+        'status',
+        'evidence',
+    ]);
+    const serialized = router.serializeState(session);
+    const restored = router.hydrateState(JSON.parse(JSON.stringify(serialized)));
+    assert.deepEqual(router.toHarnessSnapshot(restored), snapshot);
+    assert.deepEqual(restored.subgoals[1].dependsOn, ['inspect']);
 });
 
 // Summary

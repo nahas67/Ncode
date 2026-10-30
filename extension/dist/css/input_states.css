@@ -1,0 +1,51 @@
+@keyframes pulse {
+    0% {
+        opacity: 0.5;
+    }
+    50% {
+        opacity: 1;
+    }
+    100% {
+        opacity: 0.5;
+    }
+}
+
+#status.thinking {
+    color: var(--primary);
+    animation: pulse 1.5s infinite ease-in-out;
+}
+
+#send.generating {
+    background: #dc2626 !important;
+    color: #ffffff !important;
+    box-shadow: none !important;
+    cursor: pointer;
+    position: relative;
+    border: none !important;
+    pointer-events: auto;
+    opacity: 1;
+    transform: translateY(-2px) !important;
+}
+
+[data-theme='dark'] #send.generating {
+    background: #7f1d1d !important;
+}
+
+#send.generating:hover {
+    background: #b91c1c !important;
+    transform: translateY(-2px) !important;
+}
+
+[data-theme='dark'] #send.generating:hover {
+    background: #991b1b !important;
+}
+
+#send.generating::before {
+    display: none;
+}
+
+#send.generating svg {
+    width: 16px;
+    height: 16px;
+    transform: none;
+}

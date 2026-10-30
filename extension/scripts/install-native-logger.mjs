@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Installs the Gemini Nexus native logger host: copies host.js to a stable
 // path under ~/.gemini-nexus/ and writes the Chrome NativeMessagingHosts
 // manifest whose allowed_origins pins this extension's ID. Run with --uninstall
@@ -81,6 +80,14 @@ export function resolveNodeBinary() {
 // Chrome native-messaging hosts inherit a minimal PATH on macOS
 // (/usr/bin:/bin:/usr/sbin:/sbin), so `#!/usr/bin/env node` fails when Node lives
 // only under Homebrew. Rewrite the shebang to an absolute node path.
+function normalizeSourceHostPath(sourceHost) {
+    if (typeof sourceHost !== 'string') return sourceHost;
+    // `new URL(...).pathname` yields a "/C:/..." pathname on Windows, which the
+    // fs layer would otherwise resolve relative to the current drive root.
+    if (/^\/[A-Za-z]:[\\/]/.test(sourceHost)) return sourceHost.slice(1);
+    return sourceHost;
+}
+
 function writeHostScript(sourceHost, hostScriptPath, nodeBinary = resolveNodeBinary()) {
     const source = readFileSync(sourceHost, 'utf8');
     const rewritten = source.replace(/^#!.*\n/, `#!${nodeBinary}\n`);
@@ -104,7 +111,7 @@ export function install({
         extensionId = extensionIdFromKey(readManifestKey(manifestPath));
     }
     mkdirSync(dirname(hostScriptPath), { recursive: true });
-    writeHostScript(sourceHost, hostScriptPath, nodeBinary);
+    writeHostScript(normalizeSourceHostPath(sourceHost), hostScriptPath, nodeBinary);
     mkdirSync(manifestDir, { recursive: true });
     const writtenPath = join(manifestDir, `${HOST_NAME}.json`);
     writeFileSync(

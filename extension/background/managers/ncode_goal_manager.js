@@ -7,8 +7,9 @@
  *   ncodeActiveGoals   -> { [sessionId]: workflowId }
  *
  * BROADCAST CONTRACT (background -> UI)
- *   NCODE_GOAL_STATE { sessionId, workflowId, goalSession }
- *   NCODE_PREAMBLE   { sessionId, workflowId, text, ts }
+ *   NCODE_GOAL_STATE_UPDATE { sessionId, workflowId, goalSession }
+ *   NCODE_INTERIM_PREAMBLE  { sessionId, workflowId, text, ts }
+ *   (+ legacy NCODE_GOAL_STATE / NCODE_PREAMBLE aliases for older sandboxes)
  *
  * The state machine itself lives in the pure orchestrator module
  * (extension/shared/orchestrator/goal_state_machine.js); this manager only wires
@@ -32,14 +33,15 @@ import {
     parseGoalTags,
     serializeGoalSession,
 } from '../../shared/orchestrator/goal_state_machine.js';
+import { NCODE_ACTIONS, broadcastNcodeAction } from '../../shared/messaging/ncode_actions.js';
 
 export const NCODE_GOAL_STORAGE_KEYS = Object.freeze({
     goalSessions: 'ncodeGoalSessions',
     activeGoals: 'ncodeActiveGoals',
 });
 
-export const NCODE_GOAL_STATE_ACTION = 'NCODE_GOAL_STATE';
-export const NCODE_PREAMBLE_ACTION = 'NCODE_PREAMBLE';
+export const NCODE_GOAL_STATE_ACTION = NCODE_ACTIONS.GOAL_STATE_UPDATE;
+export const NCODE_PREAMBLE_ACTION = NCODE_ACTIONS.INTERIM_PREAMBLE;
 const GOAL_SESSIONS_STORAGE_KEY = NCODE_GOAL_STORAGE_KEYS.goalSessions;
 const ACTIVE_GOALS_STORAGE_KEY = NCODE_GOAL_STORAGE_KEYS.activeGoals;
 const FALLBACK_ROOT_GOAL = 'Complete the user request.';
@@ -354,8 +356,7 @@ export class NcodeGoalManager {
     async recordPreamble(goalSession, text) {
         const preamble = typeof text === 'string' ? text.trim() : '';
         if (!preamble || !goalSession) return false;
-        await sendRuntimeMessage({
-            action: NCODE_PREAMBLE_ACTION,
+        await broadcastNcodeAction(NCODE_PREAMBLE_ACTION, {
             sessionId: this.findSessionIdForWorkflow(goalSession.workflowId),
             workflowId: goalSession.workflowId || null,
             text: preamble,
@@ -419,13 +420,59 @@ export class NcodeGoalManager {
         this.activeGoals.delete(sessionId);
         if (workflowId) this.sessions.delete(workflowId);
         await this.persist();
-        await sendRuntimeMessage({
-            action: NCODE_GOAL_STATE_ACTION,
+        await broadcastNcodeAction(NCODE_GOAL_STATE_ACTION, {
             sessionId: sessionId || null,
             workflowId,
             goalSession: null,
         });
         return Boolean(workflowId);
+    }
+
+    /**
+     * Applies a manual subgoal status change coming from the harness checklist
+     * (UI NCODE_SUBGOAL_TOGGLE). The status is validated by the pure state
+     * machine, persisted and broadcast back to every open panel.
+     *
+     * @param {{ sessionId?: string|null, workflowId?: string|null, subgoalId?: string, status?: string, evidence?: string }} toggle
+     * @returns {Promise<{ updated: boolean, goalSession: object|null }>}
+     */
+    async toggleSubgoal(toggle = {}) {
+        const sessionId = toggle.sessionId || null;
+        const workflowId =
+            typeof toggle.workflowId === 'string' && toggle.workflowId
+                ? toggle.workflowId
+                : this.activeGoals.get(sessionId) || null;
+        const goalSession = workflowId ? this.sessions.get(workflowId) : null;
+        if (!goalSession) return { updated: false, goalSession: null };
+        const beforeSubgoal = (goalSession.subgoals || []).find(
+            (subgoal) => subgoal.id === toggle.subgoalId
+        );
+
+        let next;
+        try {
+            next = applyGoalUpdate(goalSession, {
+                subgoalId: toggle.subgoalId,
+                status: toggle.status,
+                evidence: toggle.evidence,
+            });
+        } catch (error) {
+            console.warn('[NcodeGoalManager] failed to toggle subgoal:', toErrorMessage(error));
+            return { updated: false, goalSession };
+        }
+        const afterSubgoal = (next.subgoals || []).find(
+            (subgoal) => subgoal.id === toggle.subgoalId
+        );
+        const changed =
+            Boolean(beforeSubgoal) &&
+            Boolean(afterSubgoal) &&
+            (beforeSubgoal.status !== afterSubgoal.status ||
+                beforeSubgoal.evidence !== afterSubgoal.evidence);
+        if (!changed) return { updated: false, goalSession };
+
+        this.sessions.set(next.workflowId, next);
+        await this.persist();
+        await this.broadcastGoalState(sessionId, next);
+        return { updated: true, goalSession: next };
     }
 
     /** System directive appended by PromptBuilder for goal-mode requests. */
@@ -456,8 +503,7 @@ export class NcodeGoalManager {
 
     /** Broadcasts one goal session to every extension page (UI). */
     async broadcastGoalState(sessionId, goalSession) {
-        await sendRuntimeMessage({
-            action: NCODE_GOAL_STATE_ACTION,
+        await broadcastNcodeAction(NCODE_GOAL_STATE_ACTION, {
             sessionId: sessionId || null,
             workflowId: goalSession?.workflowId || null,
             goalSession: goalSession || null,

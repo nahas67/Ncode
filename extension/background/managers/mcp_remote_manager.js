@@ -8,10 +8,16 @@ import {
     listToolsForConnection,
 } from './mcp/tool_listing.js';
 import { McpConnectionClient } from './mcp/connection_client.js';
+import { createReconnectPolicy } from './mcp/reconnect_policy.js';
 
 export class McpRemoteManager {
-    constructor({ clientName = 'gemini-nexus', clientVersion = '0.0.0' } = {}) {
+    constructor({
+        clientName = 'gemini-nexus',
+        clientVersion = '0.0.0',
+        reconnectPolicy = null,
+    } = {}) {
         this.connectionClient = new McpConnectionClient({ clientName, clientVersion });
+        this.reconnectPolicy = reconnectPolicy || createReconnectPolicy();
     }
 
     isEnabled(config) {
@@ -33,7 +39,19 @@ export class McpRemoteManager {
     }
 
     async disconnect(serverId) {
+        this.reconnectPolicy.invalidate(serverId);
         return this.connectionClient.disconnect(serverId);
+    }
+
+    /**
+     * Drops any cached connection/failure state for one server (or all servers)
+     * so the next list/status call dials again immediately, without waiting for
+     * the reconnect backoff window.
+     */
+    async reconnect(serverId) {
+        this.reconnectPolicy.invalidate(serverId);
+        if (serverId) await this.connectionClient.disconnect(serverId);
+        return true;
     }
 
     async _sendRpc(conn, method, params) {
@@ -111,9 +129,19 @@ export class McpRemoteManager {
         return this._listResourceTemplatesForConnection(conn);
     }
 
-    async listToolsForServer(serverId, transport, url, headers = {}) {
-        const conn = await this._ensureConnectedForServer(serverId, transport, url, headers);
-        return this._listToolsForConnection(conn);
+    /**
+     * Lists tools for one server through the per-server reconnect policy: a
+     * failed/cached connection is retried after the short invalidation TTL, and
+     * `forceNewConnection` (or an explicit reconnect) bypasses the backoff so a
+     * daemon started after Chrome is picked up without reloading the extension.
+     */
+    async listToolsForServer(serverId, transport, url, headers = {}, options = {}) {
+        return this.reconnectPolicy.execute(serverId, options, {
+            connect: () =>
+                this.connectionClient.ensureConnectedForServer(serverId, transport, url, headers),
+            disconnect: () => this.connectionClient.disconnect(serverId),
+            use: (conn) => this._listToolsForConnection(conn),
+        });
     }
 
     async listAllActiveTools(servers) {

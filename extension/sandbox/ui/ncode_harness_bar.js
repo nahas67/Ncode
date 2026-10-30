@@ -1,8 +1,22 @@
+import { NCODE_ACTIONS } from '../../shared/messaging/ncode_actions.js';
+
 const COLLAPSED_STORAGE_KEY = 'ncodeHarnessCollapsed';
 const GOAL_MODE_STORAGE_KEY = 'ncodeGoalModeEnabled';
 const COMPACTION_REQUEST_TIMEOUT_MS = 90 * 1000;
 const COMPACTION_STALL_TIMEOUT_MS = 5 * 60 * 1000;
 const COMPACTION_DONE_VISIBLE_MS = 2500;
+
+/**
+ * The harness bar re-probes the three connection lights on this cadence. The
+ * sandbox cannot talk to `chrome.*`, so every tick posts
+ * NCODE_GET_HARNESS_STATUS up the iframe -> sidepanel -> background chain and
+ * the background answers with a NCODE_HARNESS_STATUS_UPDATE broadcast.
+ */
+const HARNESS_STATUS_POLL_INTERVAL_MS = 3000;
+
+/** Default endpoints shown in the light labels before the first probe. */
+const DEFAULT_PC_SHELL_ENDPOINT = 'http://127.0.0.1:3001/mcp';
+const DEFAULT_WS_BRIDGE_ENDPOINT = 'ws://127.0.0.1:8085';
 
 const COMPACTION_BUSY_STATES = new Set([
     'requested',
@@ -71,6 +85,15 @@ function normalizeConnection(status = {}) {
         pcShellError:
             typeof source.pcShellError === 'string' && source.pcShellError
                 ? source.pcShellError
+                : null,
+        bridgeConnected: source.bridgeConnected === true,
+        bridgeEndpoint:
+            typeof source.bridgeEndpoint === 'string' && source.bridgeEndpoint
+                ? source.bridgeEndpoint
+                : DEFAULT_WS_BRIDGE_ENDPOINT,
+        bridgeError:
+            typeof source.bridgeError === 'string' && source.bridgeError
+                ? source.bridgeError
                 : null,
         updatedAt: Number.isFinite(source.updatedAt) ? source.updatedAt : Date.now(),
     };
@@ -208,12 +231,18 @@ export class NcodeHarnessBar {
             bar: elements.bar || getElement('ncode-harness-bar'),
             geminiStatus: elements.geminiStatus || getElement('ncode-gemini-status'),
             pcStatus: elements.pcStatus || getElement('ncode-pc-status'),
+            bridgeStatus: elements.bridgeStatus || getElement('ncode-bridge-status'),
             goalModeToggle: elements.goalModeToggle || getElement('ncode-goal-mode-toggle'),
             preambleTicker: elements.preambleTicker || getElement('ncode-preamble-ticker'),
             preambleText: elements.preambleText || getElement('ncode-preamble-text'),
             goalToggle: elements.goalToggle || getElement('ncode-goal-toggle'),
             compactBtn: elements.compactBtn || getElement('ncode-compact-btn'),
             compactionStatus: elements.compactionStatus || getElement('ncode-compaction-status'),
+            approval: elements.approval || getElement('ncode-approval'),
+            approvalTitle: elements.approvalTitle || getElement('ncode-approval-title'),
+            approvalDetail: elements.approvalDetail || getElement('ncode-approval-detail'),
+            approvalApprove: elements.approvalApprove || getElement('ncode-approval-approve'),
+            approvalDeny: elements.approvalDeny || getElement('ncode-approval-deny'),
             goalPanel: elements.goalPanel || getElement('ncode-goal-panel'),
             goalRoot: elements.goalRoot || getElement('ncode-goal-root'),
             goalMeta: elements.goalMeta || getElement('ncode-goal-meta'),
@@ -226,6 +255,7 @@ export class NcodeHarnessBar {
             preamble: null,
             goalSession: null,
             compactionState: null,
+            approval: null,
             collapsed: false,
             goalModeEnabled: true,
         };
@@ -234,6 +264,7 @@ export class NcodeHarnessBar {
         this.callbacks = {};
         this.initialized = false;
         this.initialStateRequested = false;
+        this.statusPollTimer = null;
         this.compactionRequestTimer = null;
         this.compactionDoneTimer = null;
         this.assignCallbacks(callbacks);
@@ -251,7 +282,9 @@ export class NcodeHarnessBar {
         this.renderPreamble();
         this.renderGoalSession();
         this.renderCompaction();
+        this.renderApproval();
         this.observeBarLayout();
+        this.startStatusPolling();
         return this;
     }
 
@@ -318,6 +351,12 @@ export class NcodeHarnessBar {
         });
         this.elements.goalReset?.addEventListener('click', () => {
             this.requestResetGoal();
+        });
+        this.elements.approvalApprove?.addEventListener('click', () => {
+            this.requestApprovalResponse(true);
+        });
+        this.elements.approvalDeny?.addEventListener('click', () => {
+            this.requestApprovalResponse(false);
         });
         this.elements.bar?.addEventListener('keydown', (event) => {
             this.handleKeydown(event);
@@ -426,10 +465,48 @@ export class NcodeHarnessBar {
         return COMPACTION_BUSY_STATES.has(this.state.compactionState?.state || '');
     }
 
+    /**
+     * Requests a harness status snapshot from the background. Idempotent for the
+     * boot hydration call so a slow first probe cannot queue duplicates; the 3s
+     * poller calls `requestStatus()` directly instead.
+     */
     requestInitialState() {
         if (this.initialStateRequested) return;
         this.initialStateRequested = true;
-        this.postToParent('NCODE_GET_STATE');
+        this.requestStatus();
+    }
+
+    /** Posts NCODE_GET_HARNESS_STATUS up to the sidepanel bridge. */
+    requestStatus() {
+        this.postToParent(NCODE_ACTIONS.GET_HARNESS_STATUS, { ts: Date.now() });
+        return true;
+    }
+
+    /**
+     * Starts the 3 second live connection-light poll. Safe to call twice and a
+     * no-op when the sandbox has no parent frame (unit tests).
+     */
+    startStatusPolling() {
+        if (this.statusPollTimer) return this.statusPollTimer;
+        const setIntervalFn = globalThis.setInterval;
+        if (typeof setIntervalFn !== 'function') return null;
+        this.statusPollTimer = setIntervalFn(() => {
+            this.requestStatus();
+        }, HARNESS_STATUS_POLL_INTERVAL_MS);
+        return this.statusPollTimer;
+    }
+
+    /** Stops the live connection-light poll. */
+    stopStatusPolling() {
+        if (!this.statusPollTimer) return;
+        globalThis.clearInterval?.(this.statusPollTimer);
+        this.statusPollTimer = null;
+    }
+
+    /** Releases every timer owned by the bar (page teardown / tests). */
+    teardown() {
+        this.stopStatusPolling();
+        this.clearCompactionTimers();
     }
 
     requestCompactResume() {
@@ -463,7 +540,7 @@ export class NcodeHarnessBar {
         if (typeof this.callbacks.onCompactResume === 'function') {
             this.callbacks.onCompactResume(payload);
         } else {
-            this.postToParent('NCODE_COMPACT_RESUME', payload);
+            this.postToParent(NCODE_ACTIONS.TRIGGER_COMPACT_RESUME, payload);
         }
         return true;
     }
@@ -473,10 +550,99 @@ export class NcodeHarnessBar {
         if (typeof this.callbacks.onResetGoal === 'function') {
             this.callbacks.onResetGoal(payload);
         } else {
-            this.postToParent('NCODE_RESET_GOAL', payload);
+            this.postToParent(NCODE_ACTIONS.RESET_GOAL, payload);
         }
         this.state.goalSession = null;
         this.renderGoalSession();
+        return true;
+    }
+
+    /**
+     * Asks the background to flip a subgoal status. `requestedStatus` defaults
+     * to the natural toggle (done <-> pending).
+     * @param {string} subgoalId
+     * @param {'pending'|'done'} [requestedStatus]
+     */
+    requestSubgoalToggle(subgoalId, requestedStatus) {
+        if (typeof subgoalId !== 'string' || !subgoalId) return false;
+        const subgoal = (this.state.goalSession?.subgoals || []).find(
+            (candidate) => candidate.id === subgoalId
+        );
+        if (!subgoal) return false;
+        const nextStatus =
+            requestedStatus === 'pending' || requestedStatus === 'done'
+                ? requestedStatus
+                : subgoal.status === 'done'
+                  ? 'pending'
+                  : 'done';
+        const payload = {
+            sessionId: this.getActiveSessionId(),
+            workflowId: this.state.goalSession?.workflowId || null,
+            subgoalId,
+            status: nextStatus,
+        };
+        if (typeof this.callbacks.onSubgoalToggle === 'function') {
+            this.callbacks.onSubgoalToggle(payload);
+        } else {
+            this.postToParent(NCODE_ACTIONS.SUBGOAL_TOGGLE, payload);
+        }
+        // Optimistic local paint; the authoritative NCODE_GOAL_STATE_UPDATE
+        // broadcast follows from the background.
+        subgoal.status = nextStatus;
+        this.renderGoalSession();
+        return true;
+    }
+
+    /**
+     * Shows an approval request raised by the background tool loop.
+     * @param {{requestId?: string, toolName?: string, title?: string, detail?: string, reason?: string}} request
+     */
+    setApprovalRequest(request) {
+        if (!request || typeof request !== 'object' || !request.requestId) {
+            return false;
+        }
+        this.state.approval = {
+            requestId: String(request.requestId),
+            toolName: typeof request.toolName === 'string' ? request.toolName : '',
+            title:
+                typeof request.title === 'string' && request.title
+                    ? request.title
+                    : `Approve ${request.toolName || 'tool call'}`,
+            detail:
+                typeof request.detail === 'string'
+                    ? request.detail
+                    : typeof request.reason === 'string'
+                      ? request.reason
+                      : '',
+        };
+        this.renderApproval();
+        return true;
+    }
+
+    /** Clears the approval strip (approved, denied or timed out). */
+    clearApprovalRequest() {
+        this.state.approval = null;
+        this.renderApproval();
+    }
+
+    /**
+     * Sends the user's decision for the pending approval request.
+     * @param {boolean} approved
+     */
+    requestApprovalResponse(approved) {
+        const approval = this.state.approval;
+        if (!approval) return false;
+        const payload = {
+            requestId: approval.requestId,
+            approved: approved === true,
+            sessionId: this.getActiveSessionId(),
+        };
+        this.clearApprovalRequest();
+        if (typeof this.callbacks.onApprovalResponse === 'function') {
+            this.callbacks.onApprovalResponse(payload);
+        } else {
+            this.postToParent(NCODE_ACTIONS.APPROVAL_RESPONSE, payload);
+        }
         return true;
     }
 
@@ -545,6 +711,25 @@ export class NcodeHarnessBar {
                   })`
                 : 'PC Shell MCP (Checking)',
             pcTitle
+        );
+
+        const bridgeEndpoint = connection?.bridgeEndpoint || DEFAULT_WS_BRIDGE_ENDPOINT;
+        const bridgePort = getEndpointPort(bridgeEndpoint);
+        const bridgeConnected = connection ? connection.bridgeConnected : null;
+        const bridgeTitle = connection
+            ? connection.bridgeConnected
+                ? `${bridgeEndpoint} · websocket bridge connected`
+                : connection.bridgeError || 'WS bridge is not reachable'
+            : 'Checking the WS bridge connection';
+        this.renderStatusPill(
+            this.elements.bridgeStatus,
+            bridgeConnected,
+            connection
+                ? `WS Bridge (Port ${bridgePort} ${
+                      connection.bridgeConnected ? 'Connected' : 'Disconnected'
+                  })`
+                : 'WS Bridge (Checking)',
+            bridgeTitle
         );
     }
 
@@ -670,7 +855,50 @@ export class NcodeHarnessBar {
 
         row.append(roleBadge, statusIcon, titleElement, statusText);
         row.title = subgoal.evidence || `${subgoal.title || 'Untitled subgoal'} · ${statusLabel}`;
+        if (subgoal.id) {
+            row.setAttribute('role', 'button');
+            row.setAttribute('tabindex', '0');
+            row.setAttribute('aria-pressed', subgoal.status === 'done' ? 'true' : 'false');
+            row.addEventListener('click', () => {
+                this.requestSubgoalToggle(subgoal.id);
+            });
+            row.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                this.requestSubgoalToggle(subgoal.id);
+            });
+        }
         return row;
+    }
+
+    /**
+     * Renders the explicit approval strip raised for a sensitive tool call.
+     * Hidden whenever no request is pending.
+     */
+    renderApproval() {
+        const approval = this.state.approval;
+        const container = this.elements.approval;
+        if (!container) return;
+        container.hidden = approval === null;
+        if (approval === null) return;
+        if (this.elements.approvalTitle) {
+            this.elements.approvalTitle.textContent = approval.title;
+        }
+        if (this.elements.approvalDetail) {
+            this.elements.approvalDetail.textContent = approval.detail;
+        }
+        if (this.elements.approvalApprove) {
+            this.elements.approvalApprove.setAttribute(
+                'aria-label',
+                `Approve ${approval.toolName || 'tool call'}`
+            );
+        }
+        if (this.elements.approvalDeny) {
+            this.elements.approvalDeny.setAttribute(
+                'aria-label',
+                `Deny ${approval.toolName || 'tool call'}`
+            );
+        }
     }
 
     applyGoalPanelVisibility() {

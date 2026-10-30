@@ -1,7 +1,8 @@
-#!/usr/bin/env node
 // Native messaging host for Gemini Nexus: writes framed log entries from the
 // extension to a rotating log file AND exposes a localhost HTTP/SSE bridge so
 // local tools (agents, curl, IDE) can pull real-time errors without DevTools.
+// The installer (scripts/install-native-logger.mjs) prepends the absolute Node
+// shebang to the installed copy so Chrome can exec it with its sparse PATH.
 //
 // Chrome MV3 cannot open TCP ports itself — this host is the only process that
 // can listen. Protocol:

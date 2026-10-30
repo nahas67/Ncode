@@ -28,32 +28,24 @@ import {
     NCODE_LOCAL_MCP_SERVER_ID,
     NCODE_LOCAL_MCP_URL,
 } from '../../shared/settings/connection.js';
+import { NCODE_ACTIONS, broadcastNcodeAction } from '../../shared/messaging/ncode_actions.js';
 import { NCODE_BRIDGE_URL } from './ncode_bridge_client.js';
 
-export const NCODE_HARNESS_STATUS_ACTION = 'NCODE_HARNESS_STATUS';
-export const NCODE_GOAL_STATE_ACTION = 'NCODE_GOAL_STATE';
+export const NCODE_HARNESS_STATUS_ACTION = NCODE_ACTIONS.HARNESS_STATUS_UPDATE;
+export const NCODE_GOAL_STATE_ACTION = NCODE_ACTIONS.GOAL_STATE_UPDATE;
 export const NCODE_HARNESS_PROBE_INTERVAL_MS = 20000;
 export const NCODE_HARNESS_PROBE_TIMEOUT_MS = 4000;
+/**
+ * Minimum age of the cached probe before a UI status request re-probes the
+ * daemons. The sandbox polls every 3s; without this TTL every tick would open a
+ * fresh MCP connection and race the regular probe loop.
+ */
+export const NCODE_HARNESS_STATUS_CACHE_MS = 2500;
 const GEMINI_WEB_URL_PATTERN = 'https://gemini.google.com/*';
 const WEB_SUCCESS_TTL_MS = 5 * 60 * 1000;
 
 function toErrorMessage(error) {
     return error && error.message ? error.message : String(error);
-}
-
-function isChromeRuntimeAvailable() {
-    return typeof chrome !== 'undefined' && Boolean(chrome?.runtime?.sendMessage);
-}
-
-async function sendRuntimeMessage(message) {
-    if (!isChromeRuntimeAvailable()) return false;
-    try {
-        await chrome.runtime.sendMessage(message);
-        return true;
-    } catch {
-        // No receivers (UI closed) or worker shutting down: broadcasts are best-effort.
-        return false;
-    }
 }
 
 export class NcodeHarnessStatus {
@@ -94,6 +86,7 @@ export class NcodeHarnessStatus {
         this.timer = null;
         this.lastWebRequestSuccessAt = 0;
         this.lastStatus = this._createEmptyStatus();
+        this.lastProbeAt = 0;
         this.activeProbe = null;
     }
 
@@ -106,10 +99,10 @@ export class NcodeHarnessStatus {
     start({ immediate = true } = {}) {
         if (this.timer) return;
         this.timer = setInterval(() => {
-            this.probeAndBroadcast().catch(() => {});
+            this.probeAndBroadcast({ force: true }).catch(() => {});
         }, this.intervalMs);
         if (immediate) {
-            this.probeAndBroadcast().catch(() => {});
+            this.probeAndBroadcast({ force: true }).catch(() => {});
         }
     }
 
@@ -127,10 +120,22 @@ export class NcodeHarnessStatus {
     /**
      * Runs both probes (coalescing concurrent calls) and broadcasts the result.
      * Never throws.
+     * @param {{ force?: boolean }} [options] when false, a still-fresh cached
+     *   snapshot is re-broadcast instead of re-probing the daemons.
      * @returns {Promise<object>} the broadcast status snapshot
      */
-    async probeAndBroadcast() {
+    async probeAndBroadcast({ force = false } = {}) {
         if (this.activeProbe) return this.activeProbe;
+        const cacheAge = Date.now() - this.lastProbeAt;
+        if (
+            !force &&
+            this.lastProbeAt > 0 &&
+            cacheAge >= 0 &&
+            cacheAge < NCODE_HARNESS_STATUS_CACHE_MS
+        ) {
+            await this.broadcast(this.lastStatus);
+            return { ...this.lastStatus };
+        }
         this.activeProbe = (async () => {
             let status;
             try {
@@ -139,6 +144,7 @@ export class NcodeHarnessStatus {
                 status = { ...this._createEmptyStatus(), probeError: toErrorMessage(error) };
             }
             this.lastStatus = status;
+            this.lastProbeAt = Date.now();
             await this.broadcast(status);
             return status;
         })();
@@ -252,21 +258,26 @@ export class NcodeHarnessStatus {
     /** Broadcasts the given (or last) status snapshot. Never throws. */
     async broadcast(status = this.lastStatus) {
         const payload = status && typeof status === 'object' ? status : this._createEmptyStatus();
-        await sendRuntimeMessage({
-            action: NCODE_HARNESS_STATUS_ACTION,
-            ...payload,
-        });
+        await broadcastNcodeAction(NCODE_HARNESS_STATUS_ACTION, payload);
     }
 
     /**
-     * Handles a UI NCODE_GET_STATE request: re-probe + broadcast harness status,
-     * then re-broadcast the current goal sessions so a freshly opened panel can
-     * hydrate its goal bar.
+     * Handles a UI NCODE_GET_HARNESS_STATUS / NCODE_GET_STATE request: re-probe
+     * (cache-aware) + broadcast harness status, then re-broadcast the current
+     * goal sessions so a freshly opened panel can hydrate its goal bar.
+     * @param {{ force?: boolean }} [options]
      */
-    async handleGetState() {
-        const status = await this.probeAndBroadcast();
+    async handleGetState(options = {}) {
+        const status = await this.probeAndBroadcast({
+            force: options?.force === true,
+        });
         await this.broadcastGoalStates();
         return status;
+    }
+
+    /** Alias used by the background message handler for the canonical action. */
+    async handleGetHarnessStatus(options = {}) {
+        return this.handleGetState(options);
     }
 
     /** Re-broadcasts every active goal session (no-op without a goal manager). */
@@ -290,8 +301,7 @@ export class NcodeHarnessStatus {
                 goalSession = null;
             }
             if (!goalSession) continue;
-            await sendRuntimeMessage({
-                action: NCODE_GOAL_STATE_ACTION,
+            await broadcastNcodeAction(NCODE_GOAL_STATE_ACTION, {
                 sessionId,
                 workflowId,
                 goalSession,

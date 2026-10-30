@@ -8,15 +8,22 @@
  *     protocol errors, batch, CORS, GET/DELETE /mcp
  *   - tools: pc_system_info, checkpoint save/load/list, fs write/read/patch,
  *     pc_exec_shell (echo, long-output truncation, timeout, background),
- *     pc_search_code (Node fallback, fileGlob), validation errors
+ *     pc_shell_session (cwd/env persistence, pushd/popd, reset/list),
+ *     pc_bg_process (start/status/logs/kill/list, registry across restarts),
+ *     pc_fs_tree (gitignore, depth cap, file sizes), pc_search_code
+ *     (Node fallback, fileGlob, contextLines, maxResults, caseInsensitive),
+ *     the pc_git_* suite in a throwaway repository, pc_clipboard round-trip
+ *     and pc_desktop_screenshot (both skipped with a reason when the OS
+ *     facility is genuinely unavailable), validation errors
  *   - WebSocket bridge: register, application ping/pong, WS-level ping/pong,
  *     legacy gemini-browser-mcp relay, WS-port health
- *   - --no-ws listener flags
- *   - stdio MCP: banner, tools/list incl. ask_gemini_web, no HTTP listener,
- *     ask_gemini_web round-trip through a fake extension, stdout JSON purity,
- *     graceful exit on stdin close
+ *   - --no-ws listener flags (plus pc_bg_process status/logs/kill after a
+ *     daemon restart against the same state directory)
+ *   - stdio MCP: banner, tools/list incl. ask_gemini_web and the new tools,
+ *     stateful shell calls, no HTTP listener, ask_gemini_web round-trip
+ *     through a fake extension, stdout JSON purity, graceful exit on stdin close
  *
- * Prints PASS/FAIL per assertion and exits 0 on success, 1 on any failure.
+ * Prints PASS/FAIL/SKIP per assertion and exits 0 on success, 1 on any failure.
  */
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -32,6 +39,7 @@ const SERVER_PATH = path.join(__dirname, 'server.mjs');
 
 let failures = 0;
 let checks = 0;
+let skips = 0;
 const startedAt = Date.now();
 
 function section(title) {
@@ -49,6 +57,14 @@ function check(name, condition, detail) {
         console.log(`  FAIL  ${name}${suffix}`);
     }
     return ok;
+}
+
+/** Record a check that cannot run on this machine (counts as skipped, not failed). */
+function skip(name, reason) {
+    skips += 1;
+    const suffix = reason === undefined ? '' : ` :: ${String(reason).replace(/\r?\n/g, ' | ').slice(0, 400)}`;
+    console.log(`  SKIP  ${name}${suffix}`);
+    return false;
 }
 
 function sleep(ms) {
@@ -539,15 +555,66 @@ async function callTool(baseUrl, id, name, args) {
 
 const CORE_TOOL_NAMES = [
     'pc_exec_shell',
+    'pc_shell_session',
+    'pc_bg_process',
     'pc_fs_read',
     'pc_fs_write',
     'pc_fs_patch',
+    'pc_fs_tree',
     'pc_search_code',
+    'pc_git_status',
+    'pc_git_diff',
+    'pc_git_status_diff',
+    'pc_git_add',
+    'pc_git_commit',
+    'pc_git_checkout',
+    'pc_git_log',
+    'pc_desktop_screenshot',
+    'pc_clipboard',
     'pc_system_info',
     'workflow_save_checkpoint',
     'workflow_load_checkpoint',
     'workflow_list_checkpoints',
 ];
+
+const EXPECTED_TOOL_COUNT = CORE_TOOL_NAMES.length;
+
+/** Run a git command directly (test fixtures only; the daemon tools are tested over MCP). */
+function gitCli(cwd, args) {
+    return spawnSync('git', args, {
+        cwd,
+        encoding: 'utf8',
+        timeout: 30_000,
+        windowsHide: true,
+    });
+}
+
+/** Best-effort process-tree kill used by test cleanup for spawned background children. */
+function killTestProcessTree(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) return;
+    if (process.platform === 'win32') {
+        try {
+            spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+                windowsHide: true,
+                timeout: 15_000,
+                encoding: 'utf8',
+            });
+        } catch {
+            // best effort
+        }
+        return;
+    }
+    try {
+        process.kill(-pid, 'SIGKILL');
+    } catch {
+        // not a group leader
+    }
+    try {
+        process.kill(pid, 'SIGKILL');
+    } catch {
+        // already gone
+    }
+}
 
 async function run() {
     console.log(`Ncode pc-daemon smoke test (${new Date().toISOString()})`);
@@ -610,7 +677,7 @@ async function run() {
                 health.json.name === 'ncode-pc-daemon' &&
                 health.json.version === '1.0.0' &&
                 typeof health.json.uptimeMs === 'number' &&
-                health.json.tools === 9,
+                health.json.tools === EXPECTED_TOOL_COUNT,
             health.text
         );
 
@@ -680,7 +747,7 @@ async function run() {
             (tool) => tool.name
         );
         check(
-            'tools/list contains all 9 core tools',
+            `tools/list contains all ${EXPECTED_TOOL_COUNT} core tools`,
             CORE_TOOL_NAMES.every((name) => httpToolNames.includes(name)),
             httpToolNames.join(',')
         );
@@ -1023,6 +1090,703 @@ async function run() {
         });
         check('pc_search_code invalid regex is a tool error', invalidRegex.isError === true, invalidRegex.text.slice(0, 300));
 
+        // ---- pc_fs_tree ----
+        section('pc_fs_tree (gitignore-aware IDE tree)');
+        const treeRoot = path.join(stateDir, 'tree-fixture');
+        fs.mkdirSync(path.join(treeRoot, 'src', 'nested'), { recursive: true });
+        fs.mkdirSync(path.join(treeRoot, 'build'), { recursive: true });
+        fs.mkdirSync(path.join(treeRoot, 'node_modules', 'pkg'), { recursive: true });
+        fs.writeFileSync(
+            path.join(treeRoot, '.gitignore'),
+            'build/\nignored.txt\nnode_modules/\n*.log\n!keep.log\n'
+        );
+        fs.writeFileSync(path.join(treeRoot, 'README.md'), '# tree fixture\n');
+        fs.writeFileSync(path.join(treeRoot, 'src', 'a.js'), 'const a = 1;\n');
+        fs.writeFileSync(path.join(treeRoot, 'src', 'nested', 'b.ts'), 'export const b = 2;\n');
+        fs.writeFileSync(path.join(treeRoot, 'ignored.txt'), 'ignored\n');
+        fs.writeFileSync(path.join(treeRoot, 'debug.log'), 'log\n');
+        fs.writeFileSync(path.join(treeRoot, 'keep.log'), 'keep\n');
+        fs.writeFileSync(path.join(treeRoot, 'build', 'out.js'), 'built\n');
+        fs.writeFileSync(path.join(treeRoot, 'node_modules', 'pkg', 'index.js'), 'module\n');
+
+        const tree = await callTool(baseUrl, 60, 'pc_fs_tree', { directory: treeRoot });
+        const treeFlat = tree.payload && Array.isArray(tree.payload.flatFiles) ? tree.payload.flatFiles : [];
+        check(
+            'pc_fs_tree returns a nested tree plus flat file list',
+            tree.isError === false &&
+                tree.payload.tree &&
+                tree.payload.tree.type === 'directory' &&
+                Array.isArray(tree.payload.tree.children) &&
+                tree.payload.files >= 3,
+            tree.text.slice(0, 500)
+        );
+        check(
+            'pc_fs_tree respects .gitignore rules',
+            treeFlat.includes('src/a.js') &&
+                treeFlat.includes('src/nested/b.ts') &&
+                treeFlat.includes('keep.log') &&
+                !treeFlat.includes('ignored.txt') &&
+                !treeFlat.includes('debug.log') &&
+                !treeFlat.some((entry) => entry.startsWith('build/')) &&
+                !treeFlat.some((entry) => entry.startsWith('node_modules/')),
+            JSON.stringify(treeFlat)
+        );
+        const readmeNode = tree.payload.tree.children.find((child) => child.name === 'README.md');
+        check(
+            'pc_fs_tree reports file sizes',
+            readmeNode && readmeNode.size === fs.statSync(path.join(treeRoot, 'README.md')).size,
+            JSON.stringify(readmeNode)
+        );
+        const treeNoIgnore = await callTool(baseUrl, 61, 'pc_fs_tree', {
+            directory: treeRoot,
+            respectGitignore: false,
+        });
+        const treeNoIgnoreFlat = treeNoIgnore.payload ? treeNoIgnore.payload.flatFiles : [];
+        check(
+            'pc_fs_tree respectGitignore:false keeps ignored files',
+            treeNoIgnore.isError === false &&
+                treeNoIgnoreFlat.includes('ignored.txt') &&
+                treeNoIgnoreFlat.some((entry) => entry.startsWith('build/')),
+            JSON.stringify(treeNoIgnoreFlat)
+        );
+        const treeDepth = await callTool(baseUrl, 62, 'pc_fs_tree', { directory: treeRoot, depth: 1 });
+        const srcDirNode =
+            treeDepth.payload && treeDepth.payload.tree.children.find((child) => child.name === 'src');
+        check(
+            'pc_fs_tree enforces the depth cap',
+            treeDepth.isError === false &&
+                srcDirNode &&
+                Array.isArray(srcDirNode.children) &&
+                srcDirNode.children.length === 0 &&
+                treeDepth.payload.totalNodes <= 30,
+            treeDepth.text.slice(0, 600)
+        );
+        const treeMissing = await callTool(baseUrl, 63, 'pc_fs_tree', {
+            directory: path.join(stateDir, 'no-such-tree-dir'),
+        });
+        check(
+            'pc_fs_tree missing directory is a clear tool error',
+            treeMissing.isError === true && /Directory not found/.test(treeMissing.text),
+            treeMissing.text.slice(0, 300)
+        );
+
+        // ---- pc_search_code extensions ----
+        section('pc_search_code context/case/maxResults');
+        const searchExtDir = path.join(stateDir, 'search-ext');
+        fs.mkdirSync(searchExtDir, { recursive: true });
+        fs.writeFileSync(
+            path.join(searchExtDir, 'context.js'),
+            'line one\nconst alpha = 1;\nconst BETA = 2;\nfunction gamma() {\n  return alpha + BETA;\n}\nline seven\n'
+        );
+        const contextSearch = await callTool(baseUrl, 64, 'pc_search_code', {
+            directory: searchExtDir,
+            pattern: 'return alpha',
+            contextLines: 2,
+        });
+        const contextMatch = contextSearch.payload && contextSearch.payload.matches[0];
+        check(
+            'pc_search_code contextLines returns surrounding lines',
+            contextSearch.isError === false &&
+                contextMatch &&
+                Array.isArray(contextMatch.context) &&
+                contextMatch.context.length === 5 &&
+                contextMatch.context.some((entry) => entry.line === 3 && entry.isMatch === false) &&
+                contextMatch.context.some((entry) => entry.isMatch === true),
+            contextSearch.text.slice(0, 800)
+        );
+        const insensitiveSearch = await callTool(baseUrl, 65, 'pc_search_code', {
+            directory: searchExtDir,
+            pattern: 'beta',
+            caseInsensitive: true,
+        });
+        const sensitiveSearch = await callTool(baseUrl, 66, 'pc_search_code', {
+            directory: searchExtDir,
+            pattern: 'beta',
+            caseInsensitive: false,
+        });
+        check(
+            'pc_search_code caseInsensitive toggles matching',
+            insensitiveSearch.isError === false &&
+                insensitiveSearch.payload.count >= 1 &&
+                sensitiveSearch.isError === false &&
+                sensitiveSearch.payload.count === 0,
+            `${insensitiveSearch.text.slice(0, 300)} / ${sensitiveSearch.text.slice(0, 200)}`
+        );
+        const cappedSearch = await callTool(baseUrl, 67, 'pc_search_code', {
+            directory: searchExtDir,
+            pattern: 'line',
+            maxResults: 1,
+        });
+        check(
+            'pc_search_code maxResults clamps the result count',
+            cappedSearch.isError === false &&
+                cappedSearch.payload.count === 1 &&
+                cappedSearch.payload.maxResults === 1,
+            cappedSearch.text.slice(0, 400)
+        );
+
+        // ---- stateful shell sessions ----
+        section('Stateful shell sessions (pc_exec_shell + pc_shell_session)');
+        const sessionDirA = path.join(stateDir, 'session-a');
+        const sessionDirB = path.join(stateDir, 'session-b');
+        fs.mkdirSync(sessionDirA, { recursive: true });
+        fs.mkdirSync(sessionDirB, { recursive: true });
+        const statefulWorkflow = 'wf_smoke_stateful';
+        const statefulCwdScript = path.join(stateDir, 'print-cwd.mjs');
+        fs.writeFileSync(statefulCwdScript, 'process.stdout.write(process.cwd());\n');
+        const statefulEnvScript = path.join(stateDir, 'print-env-var.mjs');
+        fs.writeFileSync(
+            statefulEnvScript,
+            'process.stdout.write(String(process.env.NCODE_SMOKE_VAR));\n'
+        );
+
+        const cdIntercept = await callTool(baseUrl, 70, 'pc_exec_shell', {
+            command: `cd "${sessionDirA}"`,
+            workflowId: statefulWorkflow,
+        });
+        check(
+            'pc_exec_shell intercepts cd without spawning',
+            cdIntercept.isError === false &&
+                cdIntercept.payload.intercepted === true &&
+                cdIntercept.payload.spawn === false &&
+                path.resolve(cdIntercept.payload.sessionCwd) === path.resolve(sessionDirA),
+            cdIntercept.text.slice(0, 500)
+        );
+        const pwdIntercept = await callTool(baseUrl, 71, 'pc_exec_shell', {
+            command: 'pwd',
+            workflowId: statefulWorkflow,
+        });
+        check(
+            'stateful session cwd persists across calls',
+            pwdIntercept.isError === false &&
+                path.resolve(pwdIntercept.payload.stdout.trim()) === path.resolve(sessionDirA),
+            pwdIntercept.text.slice(0, 400)
+        );
+        const spawnCwd = await callTool(baseUrl, 72, 'pc_exec_shell', {
+            command: `"${nodeExe}" "${statefulCwdScript}"`,
+            workflowId: statefulWorkflow,
+        });
+        check(
+            'spawned command runs in the session cwd',
+            spawnCwd.isError === false &&
+                spawnCwd.payload.exitCode === 0 &&
+                path.resolve(spawnCwd.payload.stdout.trim()) === path.resolve(sessionDirA) &&
+                spawnCwd.payload.workflowId === statefulWorkflow,
+            spawnCwd.text.slice(0, 500)
+        );
+        const exportIntercept = await callTool(baseUrl, 73, 'pc_exec_shell', {
+            command: 'export NCODE_SMOKE_VAR=hello-workflow',
+            workflowId: statefulWorkflow,
+        });
+        check(
+            'pc_exec_shell intercepts export',
+            exportIntercept.isError === false && exportIntercept.payload.intercepted === true,
+            exportIntercept.text.slice(0, 400)
+        );
+        const envSpawn = await callTool(baseUrl, 74, 'pc_exec_shell', {
+            command: `"${nodeExe}" "${statefulEnvScript}"`,
+            workflowId: statefulWorkflow,
+        });
+        check(
+            'session env persists into spawned commands',
+            envSpawn.isError === false && envSpawn.payload.stdout.trim() === 'hello-workflow',
+            envSpawn.text.slice(0, 400)
+        );
+        const setBuiltin = await callTool(baseUrl, 86, 'pc_exec_shell', {
+            command: 'set NCODE_SET_VAR=set-ok',
+            workflowId: statefulWorkflow,
+        });
+        const infoAfterSet = await callTool(baseUrl, 87, 'pc_shell_session', {
+            action: 'info',
+            workflowId: statefulWorkflow,
+        });
+        const unsetBuiltin = await callTool(baseUrl, 88, 'pc_exec_shell', {
+            command: 'unset NCODE_SET_VAR',
+            workflowId: statefulWorkflow,
+        });
+        const infoAfterUnset = await callTool(baseUrl, 89, 'pc_shell_session', {
+            action: 'info',
+            workflowId: statefulWorkflow,
+        });
+        check(
+            'set/unset builtins update the session env',
+            setBuiltin.isError === false &&
+                setBuiltin.payload.intercepted === true &&
+                infoAfterSet.payload.env.NCODE_SET_VAR === 'set-ok' &&
+                unsetBuiltin.isError === false &&
+                unsetBuiltin.payload.intercepted === true &&
+                !Object.prototype.hasOwnProperty.call(infoAfterUnset.payload.env, 'NCODE_SET_VAR'),
+            `${infoAfterSet.text.slice(0, 300)} / ${infoAfterUnset.text.slice(0, 300)}`
+        );
+        const envParamCall = await callTool(baseUrl, 75, 'pc_exec_shell', {
+            command: 'pwd',
+            workflowId: statefulWorkflow,
+            env: { NCODE_INLINE_VAR: 'inline-ok' },
+        });
+        const sessionInfo = await callTool(baseUrl, 76, 'pc_shell_session', {
+            action: 'info',
+            workflowId: statefulWorkflow,
+        });
+        check(
+            'pc_exec_shell env parameter merges into the session',
+            envParamCall.isError === false &&
+                sessionInfo.isError === false &&
+                sessionInfo.payload.env.NCODE_SMOKE_VAR === 'hello-workflow' &&
+                sessionInfo.payload.env.NCODE_INLINE_VAR === 'inline-ok' &&
+                path.resolve(sessionInfo.payload.cwd) === path.resolve(sessionDirA),
+            sessionInfo.text.slice(0, 700)
+        );
+        const pushdCall = await callTool(baseUrl, 77, 'pc_exec_shell', {
+            command: `pushd "${sessionDirB}"`,
+            workflowId: statefulWorkflow,
+        });
+        const pushdPwd = await callTool(baseUrl, 78, 'pc_exec_shell', {
+            command: 'pwd',
+            workflowId: statefulWorkflow,
+        });
+        check(
+            'pushd changes the session cwd and keeps a stack',
+            pushdCall.isError === false &&
+                path.resolve(pushdCall.payload.sessionCwd) === path.resolve(sessionDirB) &&
+                Array.isArray(pushdCall.payload.session.pushdStack) &&
+                pushdCall.payload.session.pushdStack.length === 1 &&
+                path.resolve(pushdPwd.payload.stdout.trim()) === path.resolve(sessionDirB),
+            `${pushdCall.text.slice(0, 300)} / ${pushdPwd.text.slice(0, 300)}`
+        );
+        const popdCall = await callTool(baseUrl, 79, 'pc_exec_shell', {
+            command: 'popd',
+            workflowId: statefulWorkflow,
+        });
+        check(
+            'popd restores the previous session cwd',
+            popdCall.isError === false &&
+                path.resolve(popdCall.payload.sessionCwd) === path.resolve(sessionDirA),
+            popdCall.text.slice(0, 400)
+        );
+        const cdMissing = await callTool(baseUrl, 80, 'pc_exec_shell', {
+            command: `cd "${path.join(stateDir, 'nope-dir')}"`,
+            workflowId: statefulWorkflow,
+        });
+        check(
+            'cd into a missing directory is a clear tool error',
+            cdMissing.isError === true && /does not exist/i.test(cdMissing.text),
+            cdMissing.text.slice(0, 400)
+        );
+        const statelessPwd = await callTool(baseUrl, 81, 'pc_exec_shell', { command: 'pwd' });
+        check(
+            'stateless pc_exec_shell keeps no session state',
+            statelessPwd.isError === false &&
+                statelessPwd.payload.workflowId === null &&
+                path.resolve(statelessPwd.payload.stdout.trim()) === path.resolve(os.homedir()),
+            statelessPwd.text.slice(0, 400)
+        );
+        const chainedBuiltins = await callTool(baseUrl, 82, 'pc_exec_shell', {
+            command: `cd "${sessionDirB}" && "${nodeExe}" "${statefulCwdScript}"`,
+            workflowId: 'wf_smoke_chain',
+        });
+        check(
+            'leading cd builtin applies before the spawned command',
+            chainedBuiltins.isError === false &&
+                path.resolve(chainedBuiltins.payload.stdout.trim()) === path.resolve(sessionDirB),
+            chainedBuiltins.text.slice(0, 500)
+        );
+        const sessionList = await callTool(baseUrl, 83, 'pc_shell_session', { action: 'list' });
+        check(
+            'pc_shell_session list reports sessions',
+            sessionList.isError === false &&
+                sessionList.payload.count >= 1 &&
+                sessionList.payload.sessions.some(
+                    (entry) => entry.workflowId === statefulWorkflow && entry.envCount >= 2
+                ),
+            sessionList.text.slice(0, 700)
+        );
+        const sessionReset = await callTool(baseUrl, 84, 'pc_shell_session', {
+            action: 'reset',
+            workflowId: statefulWorkflow,
+        });
+        const sessionAfterReset = await callTool(baseUrl, 85, 'pc_shell_session', {
+            action: 'info',
+            workflowId: statefulWorkflow,
+        });
+        check(
+            'pc_shell_session reset clears cwd and env',
+            sessionReset.isError === false &&
+                sessionReset.payload.reset === true &&
+                sessionAfterReset.isError === false &&
+                sessionAfterReset.payload.envCount === 0 &&
+                path.resolve(sessionAfterReset.payload.cwd) === path.resolve(os.homedir()),
+            sessionAfterReset.text.slice(0, 700)
+        );
+
+        // Prepared here, verified from the phase-B daemon after the restart below.
+        const persistSessionWorkflow = 'wf_smoke_persist';
+        const persistSessionCd = await callTool(baseUrl, 100, 'pc_exec_shell', {
+            command: `cd "${sessionDirB}"`,
+            workflowId: persistSessionWorkflow,
+        });
+        const persistSessionEnv = await callTool(baseUrl, 101, 'pc_exec_shell', {
+            command: 'export NCODE_PERSIST_SESSION=persisted',
+            workflowId: persistSessionWorkflow,
+        });
+        check(
+            'stateful session prepared for the restart-persistence check',
+            persistSessionCd.isError === false &&
+                persistSessionEnv.isError === false &&
+                persistSessionEnv.payload.intercepted === true,
+            `${persistSessionCd.text.slice(0, 300)} / ${persistSessionEnv.text.slice(0, 300)}`
+        );
+
+        // ---- pc_bg_process ----
+        section('Background process manager (pc_bg_process)');
+        const bgTickerScript = path.join(stateDir, 'bg-ticker.mjs');
+        fs.writeFileSync(
+            bgTickerScript,
+            "let ticks = 0;\nconst timer = setInterval(() => { ticks += 1; console.log('tick ' + ticks); }, 100);\nsetTimeout(() => { clearInterval(timer); process.exit(0); }, 60000);\n"
+        );
+        const bgStart = await callTool(baseUrl, 90, 'pc_bg_process', {
+            action: 'start',
+            command: `"${nodeExe}" "${bgTickerScript}"`,
+            name: 'smoke-ticker',
+        });
+        check(
+            'pc_bg_process start returns id/pid/logPath',
+            bgStart.isError === false &&
+                bgStart.payload.started === true &&
+                typeof bgStart.payload.id === 'string' &&
+                Number.isInteger(bgStart.payload.pid) &&
+                typeof bgStart.payload.logPath === 'string',
+            bgStart.text.slice(0, 600)
+        );
+        const bgProcessId = bgStart.payload && bgStart.payload.id;
+        const bgProcessPid = bgStart.payload && bgStart.payload.pid;
+        cleanups.push(() => killTestProcessTree(bgProcessPid));
+        await sleep(700);
+        const bgStatus = await callTool(baseUrl, 91, 'pc_bg_process', {
+            action: 'status',
+            id: bgProcessId,
+        });
+        check(
+            'pc_bg_process status reports a running process',
+            bgStatus.isError === false &&
+                bgStatus.payload.running === true &&
+                bgStatus.payload.exitCode === null &&
+                bgStatus.payload.pid === bgProcessPid &&
+                typeof bgStatus.payload.uptimeMs === 'number' &&
+                bgStatus.payload.uptimeMs >= 0,
+            bgStatus.text.slice(0, 600)
+        );
+        const bgLogs = await callTool(baseUrl, 92, 'pc_bg_process', {
+            action: 'logs',
+            id: bgProcessId,
+            tailBytes: 4096,
+        });
+        check(
+            'pc_bg_process logs returns the bounded tail',
+            bgLogs.isError === false &&
+                bgLogs.payload.text.includes('tick') &&
+                bgLogs.payload.totalBytes > 0 &&
+                bgLogs.payload.bytes <= 4096 &&
+                bgLogs.payload.logPath === bgStart.payload.logPath,
+            bgLogs.text.slice(0, 600)
+        );
+        const bgTailCap = await callTool(baseUrl, 93, 'pc_bg_process', {
+            action: 'logs',
+            id: bgProcessId,
+            tailBytes: 1,
+        });
+        check(
+            'pc_bg_process logs honours the 64 KB tail bound',
+            bgTailCap.isError === false &&
+                bgTailCap.payload.totalBytes > bgTailCap.payload.bytes &&
+                bgTailCap.payload.bytes <= 12 &&
+                bgTailCap.payload.truncated === true,
+            bgTailCap.text.slice(0, 500)
+        );
+        const bgList = await callTool(baseUrl, 94, 'pc_bg_process', { action: 'list' });
+        check(
+            'pc_bg_process list includes the running process',
+            bgList.isError === false &&
+                bgList.payload.count >= 1 &&
+                bgList.payload.processes.some((entry) => entry.id === bgProcessId && entry.running === true),
+            bgList.text.slice(0, 700)
+        );
+        const bgUnknown = await callTool(baseUrl, 95, 'pc_bg_process', {
+            action: 'status',
+            id: 'bg_does_not_exist_smoke',
+        });
+        check(
+            'pc_bg_process unknown id is a clear tool error',
+            bgUnknown.isError === true && /Unknown background process id/.test(bgUnknown.text),
+            bgUnknown.text.slice(0, 400)
+        );
+        const shellBackgroundRegistry = await callTool(baseUrl, 96, 'pc_bg_process', {
+            action: 'status',
+            id: background.payload.id,
+        });
+        check(
+            'pc_exec_shell background processes share the pc_bg_process registry',
+            shellBackgroundRegistry.isError === false &&
+                shellBackgroundRegistry.payload.pid === backgroundPid,
+            shellBackgroundRegistry.text.slice(0, 500)
+        );
+        const bgKill = await callTool(baseUrl, 97, 'pc_bg_process', {
+            action: 'kill',
+            id: bgProcessId,
+            signal: 'SIGKILL',
+        });
+        check(
+            'pc_bg_process kill stops the process tree',
+            bgKill.isError === false && bgKill.payload.killed === true && bgKill.payload.running === false,
+            bgKill.text.slice(0, 600)
+        );
+        const bgStatusAfterKill = await callTool(baseUrl, 98, 'pc_bg_process', {
+            action: 'status',
+            id: bgProcessId,
+        });
+        check(
+            'pc_bg_process status after kill reports not running',
+            bgStatusAfterKill.isError === false && bgStatusAfterKill.payload.running === false,
+            bgStatusAfterKill.text.slice(0, 600)
+        );
+
+        // Started now, managed from the phase-B daemon after this daemon exits.
+        const persistTickerScript = path.join(stateDir, 'persist-ticker.mjs');
+        fs.writeFileSync(
+            persistTickerScript,
+            "let ticks = 0;\nconst timer = setInterval(() => { ticks += 1; console.log('persist-tick ' + ticks); }, 100);\nsetTimeout(() => { clearInterval(timer); process.exit(0); }, 120000);\n"
+        );
+        const persistStart = await callTool(baseUrl, 99, 'pc_bg_process', {
+            action: 'start',
+            command: `"${nodeExe}" "${persistTickerScript}"`,
+            name: 'persist-across-restart',
+        });
+        check(
+            'pc_bg_process start for the restart-persistence check',
+            persistStart.isError === false && persistStart.payload.started === true,
+            persistStart.text.slice(0, 500)
+        );
+        const persistProcessId = persistStart.payload && persistStart.payload.id;
+        const persistProcessPid = persistStart.payload && persistStart.payload.pid;
+        cleanups.push(() => killTestProcessTree(persistProcessPid));
+        await sleep(500);
+
+        // ---- git suite ----
+        section('Git suite (pc_git_*)');
+        const gitProbe = spawnSync('git', ['--version'], { encoding: 'utf8', windowsHide: true });
+        const gitAvailable = !gitProbe.error && gitProbe.status === 0;
+        if (!gitAvailable) {
+            skip('git suite', 'git is not installed on this machine');
+        } else {
+            const repoDir = path.join(stateDir, 'git-repo');
+            fs.mkdirSync(repoDir, { recursive: true });
+            gitCli(repoDir, ['init']);
+            gitCli(repoDir, ['config', 'user.name', 'Ncode Smoke Test']);
+            gitCli(repoDir, ['config', 'user.email', 'smoke@example.com']);
+            gitCli(repoDir, ['config', 'commit.gpgsign', 'false']);
+            fs.writeFileSync(path.join(repoDir, 'README.md'), '# git fixture\n');
+            fs.writeFileSync(path.join(repoDir, 'notes.txt'), 'seed\n');
+
+            const notRepoDir = path.join(stateDir, 'not-a-repo-fixture');
+            fs.mkdirSync(notRepoDir, { recursive: true });
+            const notRepoStatus = await callTool(baseUrl, 110, 'pc_git_status', {
+                directory: notRepoDir,
+            });
+            check(
+                'pc_git_status explains non-repository directories',
+                notRepoStatus.isError === true && /Not a git repository/.test(notRepoStatus.text),
+                notRepoStatus.text.slice(0, 400)
+            );
+
+            const gitAdd = await callTool(baseUrl, 111, 'pc_git_add', {
+                directory: repoDir,
+                paths: ['README.md', 'notes.txt'],
+            });
+            check(
+                'pc_git_add stages files',
+                gitAdd.isError === false &&
+                    Array.isArray(gitAdd.payload.added) &&
+                    gitAdd.payload.added.length === 2 &&
+                    gitAdd.payload.status.counts.staged >= 2,
+                gitAdd.text.slice(0, 700)
+            );
+            const gitCommit = await callTool(baseUrl, 112, 'pc_git_commit', {
+                directory: repoDir,
+                message: 'initial commit',
+            });
+            check(
+                'pc_git_commit creates a commit',
+                gitCommit.isError === false &&
+                    typeof gitCommit.payload.hash === 'string' &&
+                    gitCommit.payload.hash.length === 40 &&
+                    gitCommit.payload.status.clean === true,
+                gitCommit.text.slice(0, 700)
+            );
+            fs.writeFileSync(path.join(repoDir, 'README.md'), '# git fixture\nsecond line\n');
+            fs.writeFileSync(path.join(repoDir, 'untracked.txt'), 'untracked\n');
+            const gitStatus = await callTool(baseUrl, 113, 'pc_git_status', { directory: repoDir });
+            check(
+                'pc_git_status reports changed + untracked files',
+                gitStatus.isError === false &&
+                    gitStatus.payload.clean === false &&
+                    gitStatus.payload.changes.some(
+                        (entry) => entry.path === 'README.md' && entry.worktreeStatus === 'M'
+                    ) &&
+                    gitStatus.payload.changes.some(
+                        (entry) => entry.path === 'untracked.txt' && entry.code === '??'
+                    ) &&
+                    typeof gitStatus.payload.branch === 'string',
+                gitStatus.text.slice(0, 900)
+            );
+            const gitDiff = await callTool(baseUrl, 114, 'pc_git_diff', { directory: repoDir });
+            check(
+                'pc_git_diff returns a unified diff',
+                gitDiff.isError === false &&
+                    gitDiff.payload.diff.includes('+second line') &&
+                    gitDiff.payload.filesChanged >= 1 &&
+                    typeof gitDiff.payload.stat === 'string',
+                gitDiff.text.slice(0, 900)
+            );
+            const gitStatusDiff = await callTool(baseUrl, 115, 'pc_git_status_diff', {
+                directory: repoDir,
+            });
+            check(
+                'pc_git_status_diff composes status + diff + commits',
+                gitStatusDiff.isError === false &&
+                    gitStatusDiff.payload.status &&
+                    Array.isArray(gitStatusDiff.payload.commits) &&
+                    gitStatusDiff.payload.commits.length >= 1 &&
+                    typeof gitStatusDiff.payload.diff.unstaged === 'string' &&
+                    gitStatusDiff.payload.diff.unstaged.includes('+second line'),
+                gitStatusDiff.text.slice(0, 900)
+            );
+            await callTool(baseUrl, 116, 'pc_git_add', {
+                directory: repoDir,
+                paths: ['README.md', 'untracked.txt'],
+            });
+            const gitCommitSecond = await callTool(baseUrl, 117, 'pc_git_commit', {
+                directory: repoDir,
+                message: 'second commit',
+            });
+            check(
+                'pc_git_commit commits staged changes',
+                gitCommitSecond.isError === false && gitCommitSecond.payload.subject === 'second commit',
+                gitCommitSecond.text.slice(0, 600)
+            );
+            const gitLog = await callTool(baseUrl, 118, 'pc_git_log', {
+                directory: repoDir,
+                maxCount: 5,
+            });
+            check(
+                'pc_git_log returns structured commits',
+                gitLog.isError === false &&
+                    gitLog.payload.count >= 2 &&
+                    gitLog.payload.commits[0].subject === 'second commit' &&
+                    typeof gitLog.payload.commits[0].hash === 'string',
+                gitLog.text.slice(0, 900)
+            );
+            const originalBranch = String(gitCli(repoDir, ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || '').trim();
+            const gitCheckoutCreate = await callTool(baseUrl, 119, 'pc_git_checkout', {
+                directory: repoDir,
+                branch: 'smoke-feature',
+                create: true,
+            });
+            check(
+                'pc_git_checkout creates and switches branches',
+                gitCheckoutCreate.isError === false &&
+                    gitCheckoutCreate.payload.branch === 'smoke-feature' &&
+                    gitCheckoutCreate.payload.created === true,
+                gitCheckoutCreate.text.slice(0, 600)
+            );
+            const gitCheckoutBack = await callTool(baseUrl, 120, 'pc_git_checkout', {
+                directory: repoDir,
+                branch: originalBranch,
+            });
+            check(
+                'pc_git_checkout switches back to the original branch',
+                gitCheckoutBack.isError === false && gitCheckoutBack.payload.branch === originalBranch,
+                gitCheckoutBack.text.slice(0, 600)
+            );
+            const gitTraversal = await callTool(baseUrl, 121, 'pc_git_add', {
+                directory: repoDir,
+                paths: ['../escape.txt'],
+            });
+            check(
+                'pc_git_add rejects paths outside the repository',
+                gitTraversal.isError === true && /outside the repository/.test(gitTraversal.text),
+                gitTraversal.text.slice(0, 500)
+            );
+        }
+
+        // ---- desktop computer-use tools ----
+        section('Desktop computer-use tools');
+        const clipboardRead = await callTool(baseUrl, 130, 'pc_clipboard', { action: 'read' });
+        if (clipboardRead.isError) {
+            skip('pc_clipboard write/read round-trip', clipboardRead.text.slice(0, 300));
+        } else {
+            const previousClipboard = clipboardRead.payload.text;
+            const clipboardMarker = `ncode-smoke-clip-${Date.now()}`;
+            const clipboardWrite = await callTool(baseUrl, 131, 'pc_clipboard', {
+                action: 'write',
+                text: clipboardMarker,
+            });
+            const clipboardVerify = await callTool(baseUrl, 132, 'pc_clipboard', { action: 'read' });
+            check(
+                'pc_clipboard write/read round-trip',
+                clipboardWrite.isError === false &&
+                    clipboardVerify.isError === false &&
+                    clipboardVerify.payload.text === clipboardMarker,
+                `${clipboardWrite.text.slice(0, 300)} / ${clipboardVerify.text.slice(0, 300)}`
+            );
+            if (previousClipboard.length > 0) {
+                await callTool(baseUrl, 133, 'pc_clipboard', {
+                    action: 'write',
+                    text: previousClipboard,
+                });
+            }
+        }
+        const screenshotPath = path.join(stateDir, 'screenshot-smoke.png');
+        const screenshot = await callTool(baseUrl, 134, 'pc_desktop_screenshot', {
+            savePath: screenshotPath,
+            format: 'png',
+        });
+        if (screenshot.isError) {
+            skip('pc_desktop_screenshot capture', screenshot.text.slice(0, 300));
+        } else {
+            const screenshotDisk = fs.existsSync(screenshotPath) ? fs.readFileSync(screenshotPath) : null;
+            check(
+                'pc_desktop_screenshot returns filePath/base64/dimensions',
+                screenshotDisk !== null &&
+                    screenshot.payload.bytes === screenshotDisk.length &&
+                    screenshot.payload.width > 0 &&
+                    screenshot.payload.height > 0 &&
+                    Buffer.from(screenshot.payload.base64, 'base64').length === screenshotDisk.length,
+                screenshot.text.slice(0, 600)
+            );
+            check(
+                'pc_desktop_screenshot writes a real PNG',
+                screenshotDisk !== null &&
+                    screenshotDisk.subarray(0, 8).toString('hex') === '89504e470d0a1a0a',
+                screenshot.text.slice(0, 300)
+            );
+        }
+        const badScreenshotFormat = await callTool(baseUrl, 135, 'pc_desktop_screenshot', {
+            format: 'jpeg',
+        });
+        check(
+            'pc_desktop_screenshot rejects unsupported formats',
+            badScreenshotFormat.isError === true && /Only "png"/.test(badScreenshotFormat.text),
+            badScreenshotFormat.text.slice(0, 400)
+        );
+        const systemInfoExtended = await callTool(baseUrl, 136, 'pc_system_info', {});
+        check(
+            'pc_system_info reports shell sessions and the tool count',
+            systemInfoExtended.isError === false &&
+                systemInfoExtended.payload.shellSessions &&
+                typeof systemInfoExtended.payload.shellSessions.count === 'number' &&
+                systemInfoExtended.payload.toolCount === EXPECTED_TOOL_COUNT,
+            systemInfoExtended.text.slice(0, 700)
+        );
+
         // ---- JSON-RPC protocol behaviour ----
         const unknownMethod = await rpcHttp(baseUrl, {
             jsonrpc: '2.0',
@@ -1253,8 +2017,57 @@ async function run() {
         );
         check(
             '--no-ws HTTP MCP still healthy',
-            Boolean(noWsHealth) && noWsHealth.json.ok === true && noWsHealth.json.tools === 9,
+            Boolean(noWsHealth) && noWsHealth.json.ok === true && noWsHealth.json.tools === EXPECTED_TOOL_COUNT,
             noWsHealth ? noWsHealth.text : noWsDaemon.stderr.slice(-1500)
+        );
+
+        // The background process was started by the phase-A daemon; state dir is shared.
+        const noWsBaseUrl = `http://127.0.0.1:${noWsPort}`;
+        const persistedStatus = await callTool(noWsBaseUrl, 180, 'pc_bg_process', {
+            action: 'status',
+            id: persistProcessId,
+        });
+        check(
+            'pc_bg_process status works after a daemon restart',
+            persistedStatus.isError === false &&
+                persistedStatus.payload.running === true &&
+                persistedStatus.payload.pid === persistProcessPid,
+            persistedStatus.text.slice(0, 700)
+        );
+        const persistedLogs = await callTool(noWsBaseUrl, 181, 'pc_bg_process', {
+            action: 'logs',
+            id: persistProcessId,
+            tailBytes: 65536,
+        });
+        check(
+            'pc_bg_process logs work after a daemon restart',
+            persistedLogs.isError === false &&
+                persistedLogs.payload.text.includes('persist-tick') &&
+                persistedLogs.payload.totalBytes > 0,
+            persistedLogs.text.slice(0, 700)
+        );
+        const persistedKill = await callTool(noWsBaseUrl, 182, 'pc_bg_process', {
+            action: 'kill',
+            id: persistProcessId,
+            signal: 'SIGKILL',
+        });
+        check(
+            'pc_bg_process kill works after a daemon restart',
+            persistedKill.isError === false &&
+                persistedKill.payload.killed === true &&
+                persistedKill.payload.running === false,
+            persistedKill.text.slice(0, 700)
+        );
+        const persistedSession = await callTool(noWsBaseUrl, 183, 'pc_shell_session', {
+            action: 'info',
+            workflowId: persistSessionWorkflow,
+        });
+        check(
+            'stateful shell session survives a daemon restart',
+            persistedSession.isError === false &&
+                path.resolve(persistedSession.payload.cwd) === path.resolve(sessionDirB) &&
+                persistedSession.payload.env.NCODE_PERSIST_SESSION === 'persisted',
+            persistedSession.text.slice(0, 700)
         );
         await noWsDaemon.stop();
 
@@ -1306,7 +2119,7 @@ async function run() {
             (tool) => tool.name
         );
         check(
-            'stdio tools/list contains all 9 core tools + ask_gemini_web',
+            `stdio tools/list contains all ${EXPECTED_TOOL_COUNT} core tools + ask_gemini_web`,
             [...CORE_TOOL_NAMES, 'ask_gemini_web'].every((name) => stdioToolNames.includes(name)),
             stdioToolNames.join(',')
         );
@@ -1320,6 +2133,25 @@ async function run() {
         check(
             'stdio tools/call pc_system_info works',
             stdioSystemInfo.result.isError === false && stdioSystemPayload.platform === process.platform
+        );
+
+        const stdioShellState = await stdioClient.request({
+            jsonrpc: '2.0',
+            id: 31,
+            method: 'tools/call',
+            params: {
+                name: 'pc_exec_shell',
+                arguments: { command: `cd "${sessionDirA}"`, workflowId: 'wf_smoke_stdio' },
+            },
+        });
+        const stdioShellPayload = JSON.parse(stdioShellState.result.content[0].text);
+        check(
+            'stdio mode exposes the stateful shell',
+            stdioShellState.result.isError === false &&
+                stdioShellPayload.intercepted === true &&
+                stdioShellPayload.workflowId === 'wf_smoke_stdio' &&
+                path.resolve(stdioShellPayload.sessionCwd) === path.resolve(sessionDirA),
+            JSON.stringify(stdioShellPayload).slice(0, 500)
         );
 
         const noExtensionAsk = await stdioClient.request(
@@ -1442,11 +2274,12 @@ async function run() {
 
     const durationMs = Date.now() - startedAt;
     console.log('');
+    const skipSuffix = skips > 0 ? ` (${skips} skipped)` : '';
     if (failures === 0) {
-        console.log(`PASS: ${checks}/${checks} checks passed in ${durationMs}ms`);
+        console.log(`PASS: ${checks}/${checks} checks passed${skipSuffix} in ${durationMs}ms`);
         return 0;
     }
-    console.log(`FAIL: ${failures} of ${checks} checks failed in ${durationMs}ms`);
+    console.log(`FAIL: ${failures} of ${checks} checks failed${skipSuffix} in ${durationMs}ms`);
     return 1;
 }
 

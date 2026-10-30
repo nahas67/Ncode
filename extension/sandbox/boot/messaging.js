@@ -1,3 +1,5 @@
+import { NCODE_ACTIONS, canonicalNcodeAction } from '../../shared/messaging/ncode_actions.js';
+
 export class AppMessageBridge {
     constructor() {
         this.app = null;
@@ -76,6 +78,15 @@ export class AppMessageBridge {
     }
 
     dispatch(action, payload, event) {
+        // Ncode harness updates arrive nested inside BACKGROUND_MESSAGE and are
+        // owned by the harness bar; every other action falls through to the app
+        // controller so the existing restore/background plumbing is untouched.
+        if (action === 'BACKGROUND_MESSAGE' && this.dispatchNcodeUiAction(payload)) {
+            return;
+        }
+        if (this.dispatchNcodeUiAction({ ...(payload || {}), action })) {
+            return;
+        }
         if (action === 'RESTORE_SHORTCUTS') {
             this.ui.updateShortcuts(payload);
             return;
@@ -162,6 +173,36 @@ export class AppMessageBridge {
         }
 
         this.app.handleIncomingMessage(event);
+    }
+
+    /**
+     * Routes a canonical Ncode harness message to the sandbox UI controller.
+     * Legacy action names are accepted through canonicalNcodeAction().
+     * @param {Record<string, unknown>} message
+     * @returns {boolean} true when the message was an Ncode UI action
+     */
+    dispatchNcodeUiAction(message) {
+        if (!message || typeof message !== 'object' || !this.ui) return false;
+        const action = canonicalNcodeAction(message.action);
+        switch (action) {
+            case NCODE_ACTIONS.HARNESS_STATUS_UPDATE:
+                this.ui.updateNcodeHarnessStatus?.(message);
+                return true;
+            case NCODE_ACTIONS.GOAL_STATE_UPDATE:
+                this.ui.updateNcodeGoalSession?.(message.goalSession ?? null, message.sessionId);
+                return true;
+            case NCODE_ACTIONS.INTERIM_PREAMBLE:
+                this.ui.updateNcodePreamble?.(message);
+                return true;
+            case NCODE_ACTIONS.COMPACTION_STATE:
+                this.ui.updateNcodeCompactionState?.(message);
+                return true;
+            case NCODE_ACTIONS.APPROVAL_REQUEST:
+                this.ui.updateNcodeApprovalRequest?.(message);
+                return true;
+            default:
+                return false;
+        }
     }
 }
 

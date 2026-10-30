@@ -21,27 +21,32 @@ Built by merging:
 ```text
 Ncode/
 ├── package.json                 # unified install / build / run / verify scripts
-├── extension/                   # Chrome MV3 extension (Gemini-Nexus base, modified)
+├── extension/                   # Chrome MV3 extension (Gemini-Nexus base, extended for Ncode)
 │   ├── background/              # MV3 service worker: providers, prompt loop, MCP, Ncode managers
-│   ├── content/ services/ shared/ settings/ sidepanel/ sandbox/ css/ assets/ vendor/
+│   ├── content/                 # content scripts incl. the Gemini live-DOM bridge fallback
+│   ├── services/ shared/ settings/ sidepanel/ sandbox/ css/ assets/ vendor/
 │   ├── manifest.json            # "Ncode" v1.0.0
-│   ├── scripts/                 # packaging helpers
+│   ├── scripts/                 # packaging helpers + project contract tests
+│   ├── test/runtime/            # e2e harness (also root test/runtime/e2e.mjs)
 │   └── dist/                    # ← loadable extension produced by npm run build:extension
 ├── pc-daemon/
-│   ├── server.mjs               # zero-dependency local PC & shell MCP daemon (HTTP 3001 + WS 8085 + stdio)
-│   ├── smoke_test.mjs           # 80-assertion end-to-end daemon test
+│   ├── server.mjs               # zero-dependency local IDE/PC MCP daemon (HTTP 3001 + WS 8085 + stdio)
+│   ├── smoke_test.mjs           # 135-check end-to-end daemon test (stateful shell, bg procs, git, desktop)
 │   ├── legacy-bridge/           # copied gemini-browser-mcp server.js + cli.js
-│   ├── native-host/             # copied native logger host + cross-platform installer
-│   └── reference-dom-injector.js
-├── orchestrator/                # pure ES-module orchestration core (Phase 2)
+│   └── native-host/             # copied native logger host + cross-platform installer
+├── orchestrator/                # pure ES-module orchestration core
 │   ├── goal_state_machine.js    # Astra Goal Loop state machine, tags, directives
-│   ├── compact_resume_engine.js # pruning, compaction prompt/summary, checkpoints, resume
-│   └── smoke_test.mjs           # 36-assertion contract test
+│   ├── compact_resume_engine.js # pruning, compaction prompt/summary, checkpoints, resume hydration
+│   ├── subagent_router.js       # 4-role planner / PC-coder / browser-operator / verifier DAG router
+│   └── smoke_test.mjs           # 42-check contract test
+├── test/runtime/e2e.mjs         # end-to-end runtime test (daemon + 3-layer messaging + compact/resume)
 └── scripts/                     # dev runner, daemon smoke test, packaged-extension verifier, acceptance gate
 ```
 
-`extension/shared/orchestrator/` contains byte-identical copies of the two orchestrator
-modules so the MV3 service worker can import them through the extension's own module graph.
+`extension/shared/orchestrator/` contains byte-identical copies of the three orchestrator
+modules (`goal_state_machine.js`, `compact_resume_engine.js`, `subagent_router.js`) so the
+MV3 service worker can import them through the extension's own module graph; the acceptance
+gate fails if any mirror drifts.
 
 ## Quick start
 
@@ -62,11 +67,14 @@ Then:
 2. Open or refresh <https://gemini.google.com> so the web session/provider is available
    (also open a normal tab you want Ncode to inspect/control).
 3. Click the Ncode toolbar icon (or `Alt+G`) to open the side panel.
-4. Type a task. The **Ncode Goal & PC Harness** bar at the top of the chat shows:
+4. Type a task. The **Ncode Goal & PC Harness** bar at the top of the chat shows three
+   live connection lights, refreshed every 3 seconds:
    - `Gemini Web (Connected)` — logged-in web-session provider status
    - `PC Shell MCP (Port 3001 Connected)` — local daemon status and discovered tool count
-   - the live **Interim Preamble** ticker, the **Goal Loop** toggle (default **on**),
-     a collapsible **Subgoal checklist**, and the **Compact & Resume** button.
+   - `WS Bridge (Port 8085 Connected)` — extension ↔ daemon WebSocket bridge (auto-reconnects)
+   plus the live **Interim Preamble** ticker, the **Goal Loop** toggle (default **on**),
+   a collapsible **Subgoal checklist** (click a row to toggle it), the **Compact & Resume**
+   button, and an inline **Approve / Deny** strip when the tool-approval policy requires it.
 
 Development (Vite watcher + daemon together):
 
@@ -192,11 +200,12 @@ Everything below is runnable from `Ncode/` and was executed against this tree:
 ```bash
 npm run install:all          # dependencies
 npm run build:extension      # Vite build + packaging + loadable extension/dist
-npm run check                # complete acceptance gate (7/7)
-npm run test:orchestrator    # 36/36 orchestrator contract checks
-npm run test:pc-daemon       # 80/80 real spawned-daemon checks
+npm run check                # complete acceptance gate (9/9 steps, fail-fast)
+npm run test:orchestrator    # 42/42 orchestrator contract checks
+npm run test:pc-daemon       # 135/135 real spawned-daemon checks
+npm run test:e2e             # end-to-end runtime test (daemon + 3-layer messaging + compact/resume)
 npm run smoke:daemon         # default-port smoke test (initialize/list/pc_system_info/WS)
-npm run verify:extension     # 27/27 packaged-extension checks
+npm run verify:extension     # 33/33 packaged-extension checks
 ```
 
 Measured results in this build:
@@ -204,30 +213,52 @@ Measured results in this build:
 | Gate | Result |
 | --- | --- |
 | `npm run install:all` | exit 0 |
-| `npm run build:extension` | Vite build succeeded; package prepared; `extension/dist` = **348 loadable files**, manifest Ncode v1.0.0 |
-| `npm run check` | **All 7 acceptance checks passed** (532 files syntax-checked, mirror byte-identical, no placeholders, 3 runtime suites, script contract) |
-| `npm run test:orchestrator` | **All 36 checks passed** |
-| `npm run test:pc-daemon` | **PASS: 80/80 checks** |
-| `npm run verify:extension` | **All 27 packaged-extension checks passed** |
-| Targeted vitest integration suite | **82/82 tests passed** (`ncode_managers`, `prompt_handler`, `builder`, `tool_loop`, `ncode_harness_bar`, `message_handler`, `window_actions`, `connection`) |
-| curl against `http://127.0.0.1:3001/mcp` | `initialize` → `ncode-pc-daemon` v1.0.0; `tools/list` → 9 tools; `tools/call pc_system_info` → `isError:false`, `platform: win32`, `node: v24.20.0` |
+| `npm run build:extension` | Vite build succeeded; package prepared; `extension/dist` = **375 loadable files**, manifest Ncode v1.0.0 |
+| `npm run verify:extension` | **All 33 packaged-extension checks passed** (identity vs source manifest, explicit loopback/Gemini host permissions, Gemini live-DOM bridge entry, every manifest-referenced file, css/ + vendor/ + assets/ packaged, no tests/node_modules) |
+| `npm run test:orchestrator` | **All 42 checks passed** |
+| `npm run test:pc-daemon` | **PASS: 135/135 checks** (stateful shell, background processes, IDE/git suite, real screenshot + clipboard) |
+| `npm run test:e2e` | **52/52 e2e checks passed** (pc-daemon MCP over HTTP, stateful cwd, 3-layer sandbox↔sidepanel↔background forwarding for every Ncode action, approval round-trip, Compact & Resume cursor reset + checkpoint mirror) |
+| `npm run check` | **All 9 acceptance checks passed** (file syntax scan, 3 orchestrator mirrors byte-identical, no placeholders, build, dist verify, orchestrator smoke, daemon smoke, e2e, root script contract) |
+| `cd extension && npx vitest run` | **214 files / 1603 tests passed** |
+| curl against `http://127.0.0.1:3001/mcp` | `initialize` → `ncode-pc-daemon` v1.0.0; `tools/list` → 21 tools; `tools/call pc_system_info` → `isError:false`, `platform: win32`, `node: v24.20.0` |
 | `npm run dev` | daemon healthy on 3001 + Vite ready on 3000 |
 
-Live browser acceptance (clicking through a signed-in Chrome profile) is **not** exercised by
-the automated gates above: the verified levels here are source → unit/integration tests →
-Vite build → packaged payload → local daemon HTTP/WS/stdio behavior. Loading the unpacked
-`extension/dist` into a signed-in Chrome is the remaining manual acceptance step.
+Live browser acceptance was also exercised on this tree with a real Chromium build
+(Chrome for Testing via `agent-browser --extension extension/dist`):
+
+- `extension/dist` loads as an unpacked MV3 extension (manifest valid, including
+  `ws://127.0.0.1/*` and the `content/gemini_dom_bridge.js` content script).
+- The side panel renders the sandboxed chat UI and the three-light harness bar.
+- With `pc-daemon` started afterwards, the bar flipped **PC Shell MCP (Port 3001 Connected)**
+  and **WS Bridge (Port 8085 Connected)** live, without a page reload (3-second status poll
+  across the sandbox → sidepanel → background chain; WS bridge auto-reconnect), while
+  **Gemini Web** correctly stayed disconnected in the fresh profile with no signed-in tab.
+- Screenshots: `artifacts/e2e/real-chrome-sidepanel-live.png`,
+  `artifacts/e2e/real-chrome-sandbox.png` (regenerate with the same `agent-browser` flow).
 
 ## Security & operational notes
 
 - Both daemon listeners bind loopback only (`127.0.0.1`); the WS bridge and MCP endpoint are
   unauthenticated loopback services. `pc_exec_shell` runs with the user's full privileges —
   run Ncode only on a machine you trust and do not expose the ports.
+- Sensitive PC tools (shell, file writes/patches, git add/commit/checkout, clipboard, page
+  script evaluation) can be gated by `ncodeApprovalPolicy` in `chrome.storage.local`:
+  `auto` (default, no prompts), `ask` (risky tools prompt the harness bar), `always`, or
+  `never` (risky tools are refused). Timeouts and closed panels deny rather than hang.
 - `ask_gemini_web` over the bridge is intentionally single-shot (no stored session history,
   no tool loop) to avoid interleaving the shared reverse-engineered web auth context.
-- A "fresh Gemini Web conversation" for Compact & Resume means resetting the web auth/context
-  and re-hydrating from the durable checkpoint; the reverse-engineered transport has no
-  server-side conversation id to fork.
+- Compact & Resume resets the persisted Gemini Web conversation cursor
+  (`conversationId`/`responseId`/`choiceId` → `null`) so the next turn opens a **brand-new,
+  clean `gemini.google.com` chat** pre-hydrated with the checkpoint summary, while the durable
+  chat session id stays the same.
+- The primary Gemini Web transport is the reverse-engineered `StreamGenerate` fetch. When it
+  fails with an auth/401/403/session-expired/parser error, Ncode automatically falls back once
+  to injecting the prompt into a live `gemini.google.com` tab DOM (`content/gemini_dom_bridge.js`)
+  and streams the answer back into the same tool loop.
+- The built-in local MCP server (`ncode-pc-daemon`, `http://127.0.0.1:3001/mcp`) is
+  force-merged and enabled on startup and before every prompt; legacy `ncode_local_pc`
+  settings entries are migrated by URL. The MCP manager reconnects automatically when the
+  daemon starts after Chrome (no extension reload).
 - MCP checkpoint mirroring is best-effort (the daemon may be offline); the
   `chrome.storage.local` checkpoint is authoritative and the compaction reports failure
   rather than claiming an unpersisted checkpoint is durable.
@@ -239,6 +270,7 @@ Vite build → packaged payload → local daemon HTTP/WS/stdio behavior. Loading
 - Ncode relies on the user's Gemini Web account/model availability; no API fallback is used.
 - Tool execution requires Chrome to stay open on the signed-in profile and the MV3 worker to
   stay alive (the harness arms stream heartbeats and keep-alive during long commands).
-- The upstream Gemini-Nexus full test suite (`npm run check` inside `extension/`) includes
-  tests for repository docs/assets that were not copied into Ncode; only the Ncode
-  acceptance gate (`npm run check` at the Ncode root) is authoritative here.
+- The Gemini live-DOM fallback currently forwards prompt text only (image attachments stay on
+  the primary transport); image-edit flows therefore require Mode A to be healthy.
+- Chrome-branded builds ≥ 137 ignore `--load-extension`; use `chrome://extensions → Load
+  unpacked` (or a Chrome for Testing/Chromium automation build) to load `extension/dist`.

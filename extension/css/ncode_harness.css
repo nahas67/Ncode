@@ -68,6 +68,9 @@ body.ncode-harness-present .chat-empty {
 
 .ncode-harness-left {
     flex: 1 1 auto;
+    /* Three connection lights can wrap onto a second row in a narrow sidepanel. */
+    flex-wrap: wrap;
+    row-gap: 4px;
 }
 
 .ncode-harness-right {
@@ -496,4 +499,79 @@ body.ncode-harness-present .chat-empty {
     .ncode-goal-toggle svg {
         transition: none;
     }
+}
+
+/* Approval strip for NCODE_APPROVAL_REQUEST. */
+.ncode-approval {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    border: 1px solid color-mix(in srgb, var(--warning, #b26a00) 55%, var(--border-color));
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--warning, #b26a00) 12%, var(--bg-elevated));
+}
+
+.ncode-approval-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.ncode-approval-title {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.ncode-approval-detail {
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 72px;
+    overflow: auto;
+}
+
+.ncode-approval-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.ncode-approval-btn {
+    box-sizing: border-box;
+    padding: 3px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm, 6px);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.ncode-approval-btn:hover {
+    background: var(--bg-hover, color-mix(in srgb, var(--bg-elevated) 80%, var(--text-primary)));
+}
+
+.ncode-approval-btn.is-approve {
+    border-color: var(--accent, #1a73e8);
+    color: var(--accent, #1a73e8);
+}
+
+.ncode-approval-btn.is-deny {
+    border-color: var(--error, #c5221f);
+    color: var(--error, #c5221f);
+}
+
+.ncode-goal-row[role='button'] {
+    cursor: pointer;
+}
+
+.ncode-goal-row[role='button']:focus-visible {
+    outline: 2px solid var(--accent, #1a73e8);
+    outline-offset: 1px;
 }

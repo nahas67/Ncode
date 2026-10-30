@@ -76,8 +76,7 @@ const HAS_GOAL_TAG_PATTERN = /<ncode_(?:preamble|goal_update|goal_complete)\b/i;
 // Gemini Web's markdown renderer can HTML-escape the angle brackets of the
 // status tags. This hint triggers a decoded retry in parseGoalTags.
 const HTML_ENTITY_TAG_HINT = /&lt;|&#0*60;|&#x0*3c;/i;
-const HTML_ENTITY_PATTERN =
-    /&(lt|gt|quot|apos|amp|#0*39|#x0*27|#0*34|#0*38|#0*60|#0*62);/gi;
+const HTML_ENTITY_PATTERN = /&(lt|gt|quot|apos|amp|#0*39|#x0*27|#0*34|#0*38|#0*60|#0*62);/gi;
 const HTML_ENTITY_MAP = Object.freeze({
     '&lt;': '<',
     '&gt;': '>',

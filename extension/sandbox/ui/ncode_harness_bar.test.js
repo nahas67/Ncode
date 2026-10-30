@@ -9,11 +9,15 @@ const REQUIRED_SINGLE_IDS = [
     'ncode-harness-bar',
     'ncode-gemini-status',
     'ncode-pc-status',
+    'ncode-bridge-status',
     'ncode-goal-mode-toggle',
     'ncode-preamble-ticker',
     'ncode-preamble-text',
     'ncode-goal-toggle',
     'ncode-compact-btn',
+    'ncode-approval',
+    'ncode-approval-approve',
+    'ncode-approval-deny',
     'ncode-goal-panel',
     'ncode-goal-root',
     'ncode-goal-list',
@@ -53,6 +57,9 @@ function renderHarnessTemplate() {
 function createBar(options = {}) {
     const bar = new NcodeHarnessBar(options);
     bar.init();
+    // Production boot keeps the 3s poll alive; unit tests drive polling
+    // explicitly so a leaked interval cannot race later assertions.
+    bar.stopStatusPolling();
     return bar;
 }
 
@@ -121,17 +128,23 @@ describe('NcodeHarnessBar connection status', () => {
             pcShellConnected: true,
             pcShellEndpoint: 'http://127.0.0.1:3001/mcp',
             pcShellToolCount: 8,
+            bridgeConnected: true,
+            bridgeEndpoint: 'ws://127.0.0.1:8085',
             updatedAt: 10,
         });
 
         const geminiPill = getElement('ncode-gemini-status');
         const pcPill = getElement('ncode-pc-status');
+        const bridgePill = getElement('ncode-bridge-status');
 
         expect(geminiPill.textContent).toContain('Gemini Web (Connected)');
         expect(geminiPill.classList.contains('is-connected')).toBe(true);
         expect(pcPill.textContent).toContain('PC Shell MCP (Port 3001 Connected)');
         expect(pcPill.classList.contains('is-connected')).toBe(true);
         expect(pcPill.title).toContain('8 tools available');
+        expect(bridgePill.textContent).toContain('WS Bridge (Port 8085 Connected)');
+        expect(bridgePill.classList.contains('is-connected')).toBe(true);
+        expect(bridgePill.title).toContain('ws://127.0.0.1:8085');
     });
 
     it('renders disconnected pills with the error as a tooltip', () => {
@@ -140,16 +153,37 @@ describe('NcodeHarnessBar connection status', () => {
             geminiWebConnected: false,
             pcShellConnected: false,
             pcShellError: 'ECONNREFUSED 127.0.0.1:3001',
+            bridgeConnected: false,
+            bridgeError: 'ECONNREFUSED 127.0.0.1:8085',
         });
 
         const geminiPill = getElement('ncode-gemini-status');
         const pcPill = getElement('ncode-pc-status');
+        const bridgePill = getElement('ncode-bridge-status');
 
         expect(geminiPill.textContent).toContain('Gemini Web (Disconnected)');
         expect(geminiPill.classList.contains('is-disconnected')).toBe(true);
         expect(pcPill.textContent).toContain('PC Shell MCP (Port 3001 Disconnected)');
         expect(pcPill.classList.contains('is-disconnected')).toBe(true);
         expect(pcPill.title).toContain('ECONNREFUSED');
+        expect(bridgePill.textContent).toContain('WS Bridge (Port 8085 Disconnected)');
+        expect(bridgePill.classList.contains('is-disconnected')).toBe(true);
+        expect(bridgePill.title).toContain('ECONNREFUSED');
+    });
+
+    it('keeps the three connection lights independent', () => {
+        const bar = createBar();
+        bar.setConnectionStatus({
+            geminiWebConnected: true,
+            pcShellConnected: false,
+            pcShellError: 'daemon offline',
+            bridgeConnected: true,
+            bridgeEndpoint: 'ws://127.0.0.1:8085',
+        });
+
+        expect(getElement('ncode-gemini-status').classList.contains('is-connected')).toBe(true);
+        expect(getElement('ncode-pc-status').classList.contains('is-disconnected')).toBe(true);
+        expect(getElement('ncode-bridge-status').classList.contains('is-connected')).toBe(true);
     });
 });
 
@@ -338,7 +372,7 @@ describe('NcodeHarnessBar request plumbing', () => {
         renderHarnessTemplate();
     });
 
-    it('requests the initial state exactly once', () => {
+    it('requests the initial harness status exactly once', () => {
         const postMessageSpy = vi.spyOn(window.parent, 'postMessage');
         const bar = createBar();
 
@@ -346,8 +380,49 @@ describe('NcodeHarnessBar request plumbing', () => {
         bar.requestInitialState();
 
         expect(postMessageSpy).toHaveBeenCalledTimes(1);
-        expect(postMessageSpy).toHaveBeenCalledWith({ action: 'NCODE_GET_STATE' }, '*');
+        expect(postMessageSpy.mock.calls[0][0]).toMatchObject({
+            action: 'NCODE_GET_HARNESS_STATUS',
+            payload: { ts: expect.any(Number) },
+        });
+        expect(postMessageSpy.mock.calls[0][1]).toBe('*');
         postMessageSpy.mockRestore();
+        bar.teardown();
+    });
+
+    it('polls the harness status on the 3 second cadence', () => {
+        vi.useFakeTimers();
+        try {
+            const postMessageSpy = vi.spyOn(window.parent, 'postMessage');
+            const bar = createBar();
+            bar.teardown();
+            postMessageSpy.mockClear();
+
+            bar.startStatusPolling();
+            vi.advanceTimersByTime(3000);
+            expect(
+                postMessageSpy.mock.calls.filter(
+                    ([message]) => message?.action === 'NCODE_GET_HARNESS_STATUS'
+                ).length
+            ).toBe(1);
+
+            vi.advanceTimersByTime(6000);
+            expect(
+                postMessageSpy.mock.calls.filter(
+                    ([message]) => message?.action === 'NCODE_GET_HARNESS_STATUS'
+                ).length
+            ).toBe(3);
+
+            bar.stopStatusPolling();
+            vi.advanceTimersByTime(9000);
+            expect(
+                postMessageSpy.mock.calls.filter(
+                    ([message]) => message?.action === 'NCODE_GET_HARNESS_STATUS'
+                ).length
+            ).toBe(3);
+            postMessageSpy.mockRestore();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('posts compact/reset requests with the active session id', () => {
@@ -359,7 +434,7 @@ describe('NcodeHarnessBar request plumbing', () => {
 
         expect(postMessageSpy).toHaveBeenCalledWith(
             {
-                action: 'NCODE_COMPACT_RESUME',
+                action: 'NCODE_TRIGGER_COMPACT_RESUME',
                 payload: { sessionId: 'session-7', force: true },
             },
             '*'
@@ -373,6 +448,73 @@ describe('NcodeHarnessBar request plumbing', () => {
             '*'
         );
         postMessageSpy.mockRestore();
+        bar.teardown();
+    });
+
+    it('posts subgoal toggles and applies them optimistically', () => {
+        const postMessageSpy = vi.spyOn(window.parent, 'postMessage');
+        const bar = createBar();
+        bar.setGoalSession(SAMPLE_GOAL_SESSION, 'session-7');
+
+        expect(bar.requestSubgoalToggle('goal-2')).toBe(true);
+
+        expect(postMessageSpy).toHaveBeenCalledWith(
+            {
+                action: 'NCODE_SUBGOAL_TOGGLE',
+                payload: {
+                    sessionId: 'session-7',
+                    workflowId: 'wf-1',
+                    subgoalId: 'goal-2',
+                    status: 'done',
+                },
+            },
+            '*'
+        );
+        const rows = getElement('ncode-goal-list').querySelectorAll('.ncode-goal-row');
+        expect(rows[1].classList.contains('is-done')).toBe(true);
+        postMessageSpy.mockRestore();
+        bar.teardown();
+    });
+
+    it('renders an approval request and posts approve/deny responses', () => {
+        const postMessageSpy = vi.spyOn(window.parent, 'postMessage');
+        const bar = createBar();
+
+        expect(
+            bar.setApprovalRequest({
+                requestId: 'approval-1',
+                toolName: 'pc_exec_shell',
+                detail: 'command: npm run dev',
+                reason: 'This tool can change your machine.',
+            })
+        ).toBe(true);
+
+        const approval = getElement('ncode-approval');
+        expect(approval.hidden).toBe(false);
+        expect(getElement('ncode-approval-title').textContent).toContain('pc_exec_shell');
+        expect(getElement('ncode-approval-detail').textContent).toContain('npm run dev');
+
+        getElement('ncode-approval-approve').click();
+        expect(postMessageSpy).toHaveBeenCalledWith(
+            {
+                action: 'NCODE_APPROVAL_RESPONSE',
+                payload: { requestId: 'approval-1', approved: true, sessionId: null },
+            },
+            '*'
+        );
+        expect(approval.hidden).toBe(true);
+
+        bar.setApprovalRequest({ requestId: 'approval-2', toolName: 'pc_fs_write' });
+        getElement('ncode-approval-deny').click();
+        expect(postMessageSpy).toHaveBeenCalledWith(
+            {
+                action: 'NCODE_APPROVAL_RESPONSE',
+                payload: { requestId: 'approval-2', approved: false, sessionId: null },
+            },
+            '*'
+        );
+        postMessageSpy.mockRestore();
+        bar.teardown();
     });
 
     it('prefers injected callbacks over parent posts', () => {
@@ -390,5 +532,6 @@ describe('NcodeHarnessBar request plumbing', () => {
         expect(onResetGoal).toHaveBeenCalledWith({ sessionId: 'session-3' });
         expect(postMessageSpy).not.toHaveBeenCalled();
         postMessageSpy.mockRestore();
+        bar.teardown();
     });
 });

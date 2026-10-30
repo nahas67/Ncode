@@ -1,5 +1,6 @@
 import { sendOfficialMessage } from '../../../services/providers/official.js';
 import { sendWebMessage } from '../../../services/providers/web.js';
+import { sendPromptViaGeminiDom } from '../../../services/providers/web_dom.js';
 import { sendOpenAIMessage } from '../../../services/providers/openai_compatible.js';
 import { sendAnthropicMessage } from '../../../services/providers/anthropic.js';
 import { stripNativeContextIds } from '../../../services/providers/shared/web_auth.js';
@@ -26,8 +27,14 @@ import {
     isDedicatedApiProvider,
 } from '../../../shared/settings/dedicated_providers.js';
 import { getHistory } from './history_store.js';
-import { prepareManagedContext } from './context_manager.js';
 import {
+    getWebConversationCursor,
+    prepareManagedContext,
+    toWebConversationIds,
+    updateWebConversationCursor,
+} from './context_manager.js';
+import {
+    classifyProviderError,
     isRefreshableWebAuthError,
     isUnavailableWebAuthError,
     withProviderRetry,
@@ -318,6 +325,109 @@ function buildWebPromptWithHistory(currentText, history) {
     ].join('\n');
 }
 
+/**
+ * Decides whether a failed Mode A (direct StreamGenerate) attempt should be
+ * retried once through the live-DOM bridge (Mode B).
+ *
+ * Auth/session failures (expired cookies, 401/403, removed tokens) and
+ * network/parser failures ("No valid response found", fetch errors) can all be
+ * bypassed by driving the user's real Gemini tab, so they qualify. Validation
+ * failures (unsupported model / non-image attachments) would fail the same way
+ * in Mode B, so the original error is surfaced untouched.
+ *
+ * @param {unknown} error Mode A failure.
+ * @returns {boolean}
+ */
+function shouldFallbackToGeminiDom(error) {
+    const message = error instanceof Error ? error.message : String(error || '');
+    const { kind } = classifyProviderError(message);
+    return kind === 'auth' || kind === 'network' || message.includes('No valid response found');
+}
+
+/**
+ * Persists the native Gemini Web conversation cursor (`[conversationId,
+ * responseId, choiceId]`) exposed by a successful StreamGenerate reply so the
+ * next Web turn continues the same server-side chat.
+ *
+ * A reply without ids (or an explicit null) resets the cursor to a fresh chat,
+ * which is the correct fallback when Gemini did not return a continuation
+ * pointer. Persistence is best-effort: a storage failure must never turn a
+ * good answer into an error reply. Truncated replies never reach this helper.
+ *
+ * @param {{ ids?: string[], newContext?: { conversationIds?: string[] }|null }|null} response
+ * @returns {Promise<void>}
+ */
+async function persistWebConversationCursor(response) {
+    const ids = response?.ids || response?.newContext?.conversationIds || null;
+    try {
+        await updateWebConversationCursor(ids);
+    } catch (error) {
+        console.warn('[Gemini Nexus] Failed to persist Gemini Web conversation cursor:', error);
+    }
+}
+
+/**
+ * Runs the same prompt through the live Gemini DOM bridge after Mode A failed.
+ *
+ * Streaming deltas are forwarded through the caller's `onUpdate` so the UI
+ * keeps receiving partial text, but the final reply declares `thoughts: null`
+ * (DOM extraction does not separate native thoughts), no images/sources and no
+ * native context (`newContext: null`) because the DOM path is stateless from
+ * the extension's perspective. When Mode B also fails, a combined error names
+ * both failure modes so the user (and logs) can see the real cause of each.
+ *
+ * @param {object} request Original prompt request.
+ * @param {string} fullText Prompt including system instruction and local history.
+ * @param {Function|null|undefined} onUpdate Streaming callback.
+ * @param {AbortSignal|null|undefined} signal Request abort signal.
+ * @param {Error} modeAError Failure raised by the direct StreamGenerate path.
+ * @returns {Promise<object>} GEMINI_REPLY-shaped success response.
+ */
+async function runGeminiDomFallback(request, fullText, onUpdate, signal, modeAError) {
+    const modeAMessage = modeAError?.message || 'unknown error';
+    console.warn(
+        `[Gemini Nexus] StreamGenerate failed (${modeAMessage}); retrying through the Gemini live-DOM bridge...`
+    );
+
+    const domUpdate =
+        typeof onUpdate === 'function'
+            ? (partialText, partialThoughts) => {
+                  try {
+                      onUpdate(partialText, partialThoughts ?? null);
+                  } catch (error) {
+                      // A broken UI subscriber must not abort the DOM request.
+                      console.warn('[Gemini Nexus] DOM stream onUpdate failed:', error);
+                  }
+              }
+            : null;
+
+    try {
+        const domResponse = await sendPromptViaGeminiDom({
+            prompt: fullText,
+            signal,
+            onUpdate: domUpdate,
+        });
+
+        return createSuccessReply(
+            request,
+            {
+                text: domResponse.text,
+                thoughts: null,
+                images: [],
+                sources: [],
+                newContext: null,
+            },
+            { context: null, webMode: 'dom' }
+        );
+    } catch (error) {
+        if (error?.name === 'AbortError') throw error;
+        const modeBMessage = error?.message || 'unknown error';
+        throw new Error(
+            `Gemini Web request failed in both modes. Mode A (StreamGenerate): ${modeAMessage} | Mode B (live DOM bridge): ${modeBMessage}`
+        );
+    }
+}
+
 export class RequestDispatcher {
     constructor(authManager) {
         this.auth = authManager;
@@ -542,12 +652,30 @@ export class RequestDispatcher {
         }
         const hasWebOptions = Object.keys(webOptions).length > 0;
 
+        // Server-side Gemini Web conversation cursor, persisted across turns so
+        // StreamGenerate continues the same chat thread. Compact & Resume resets
+        // it, which makes the next turn post the empty triple and open a fresh
+        // gemini.google.com conversation pre-hydrated with the checkpoint.
+        let webConversationIds = ['', '', ''];
+        try {
+            webConversationIds = toWebConversationIds(await getWebConversationCursor());
+        } catch (error) {
+            console.warn('[Gemini Nexus] Failed to read Gemini Web conversation cursor:', error);
+        }
+
+        // Mode A (direct StreamGenerate). Retries only make sense for refreshable
+        // auth failures and transient network/parser glitches; other failures
+        // (e.g. a removed model or a non-image attachment) break out immediately.
+        let modeAError = null;
         while (attemptCount < WEB_AUTH_RETRY_MAX_ATTEMPTS) {
             attemptCount++;
 
             try {
                 const context = await this.auth.getOrFetchContext();
                 const requestContext = stripNativeContextIds(context);
+                // Continue the persisted server-side conversation. An empty
+                // triple intentionally starts a brand-new chat.
+                requestContext.conversationIds = [...webConversationIds];
 
                 const webMessageArgs = [
                     fullText,
@@ -573,8 +701,10 @@ export class RequestDispatcher {
                     throw new Error(truncationMessage);
                 }
 
-                // Success! Update auth state
+                // Success! Update auth state and advance the server-side
+                // conversation cursor for the next Web turn.
                 await this.auth.updateContext(response.newContext);
+                await persistWebConversationCursor(response);
 
                 return createSuccessReply(
                     request,
@@ -586,10 +716,7 @@ export class RequestDispatcher {
                 );
             } catch (error) {
                 const message = error.message || '';
-                if (isUnavailableWebAuthError(message)) {
-                    throw error;
-                }
-
+                const isUnavailableAuthError = isUnavailableWebAuthError(message);
                 const isLoginError = isRefreshableWebAuthError(message);
 
                 const isNetworkGlitch =
@@ -600,6 +727,7 @@ export class RequestDispatcher {
                     message.includes('429');
 
                 if (
+                    !isUnavailableAuthError &&
                     (isLoginError || isNetworkGlitch) &&
                     attemptCount < WEB_AUTH_RETRY_MAX_ATTEMPTS
                 ) {
@@ -619,8 +747,25 @@ export class RequestDispatcher {
                     continue;
                 }
 
-                throw error;
+                modeAError = error;
+                break;
             }
         }
+
+        if (!modeAError) {
+            throw new Error('Gemini Web request failed without a recorded error.');
+        }
+        if (signal?.aborted) {
+            const abortError = new Error('Gemini Web request aborted.');
+            abortError.name = 'AbortError';
+            throw abortError;
+        }
+
+        // Mode B (live DOM tab injection). Unrecoverable auth/session errors
+        // switch immediately; retry-exhausted network/parser errors switch after
+        // the loop. Validation failures surface the original Mode A error.
+        if (!shouldFallbackToGeminiDom(modeAError)) throw modeAError;
+
+        return await runGeminiDomFallback(request, fullText, onUpdate, signal, modeAError);
     }
 }

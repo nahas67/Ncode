@@ -1,5 +1,6 @@
 import { downloadFile, downloadText } from './downloads.js';
 import { getRuntimeLastError } from '../../shared/logging/runtime_error.js';
+import { NCODE_ACTIONS } from '../../shared/messaging/ncode_actions.js';
 import {
     HISTORY_STORAGE_KEYS,
     SETTINGS_STORAGE_KEYS,
@@ -57,11 +58,35 @@ const WINDOW_MESSAGE_HANDLERS = {
     NCODE_GET_STATE(payload, bridge) {
         bridge.forwardToBackground({ action: 'NCODE_GET_STATE' });
     },
+    NCODE_GET_HARNESS_STATUS(payload, bridge) {
+        bridge.forwardToBackground({
+            action: NCODE_ACTIONS.GET_HARNESS_STATUS,
+            ts: Number.isFinite(payload?.ts) ? payload.ts : Date.now(),
+        });
+    },
     NCODE_COMPACT_RESUME(payload, bridge) {
         bridge.forwardToBackground({ action: 'NCODE_COMPACT_RESUME', ...(payload || {}) });
     },
+    NCODE_TRIGGER_COMPACT_RESUME(payload, bridge) {
+        bridge.forwardToBackground({
+            action: NCODE_ACTIONS.TRIGGER_COMPACT_RESUME,
+            ...(payload || {}),
+        });
+    },
     NCODE_RESET_GOAL(payload, bridge) {
         bridge.forwardToBackground({ action: 'NCODE_RESET_GOAL', ...(payload || {}) });
+    },
+    NCODE_SUBGOAL_TOGGLE(payload, bridge) {
+        bridge.forwardToBackground({
+            action: NCODE_ACTIONS.SUBGOAL_TOGGLE,
+            ...(payload || {}),
+        });
+    },
+    NCODE_APPROVAL_RESPONSE(payload, bridge) {
+        bridge.forwardToBackground({
+            action: NCODE_ACTIONS.APPROVAL_RESPONSE,
+            ...(payload || {}),
+        });
     },
     DOWNLOAD_IMAGE(payload) {
         downloadFile(payload.url, payload.filename);

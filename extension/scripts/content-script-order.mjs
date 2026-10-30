@@ -16,7 +16,11 @@ function readManifestContentScriptEntries() {
         (entry) =>
             entry.world !== 'MAIN' &&
             entry.all_frames !== true &&
-            !entry.js?.includes('content/gemini_watermark_bridge.js')
+            !entry.js?.includes('content/gemini_watermark_bridge.js') &&
+            // The Gemini live-DOM bridge ships as its own unbundled file (see
+            // package-extension.mjs): bundling it into content/index.js would
+            // load it on every page instead of only gemini.google.com.
+            !entry.js?.includes('content/gemini_dom_bridge.js')
     );
 }
 

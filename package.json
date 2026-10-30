@@ -15,6 +15,9 @@
         "dev": "node scripts/dev.mjs",
         "smoke:daemon": "node scripts/smoke-daemon.mjs",
         "verify:extension": "node scripts/verify-extension-dist.mjs",
+        "verify:dist": "node scripts/verify-extension-dist.mjs",
+        "test:extension": "npm --prefix extension test",
+        "test:e2e": "node test/runtime/e2e.mjs",
         "test:orchestrator": "node orchestrator/smoke_test.mjs",
         "test:pc-daemon": "node pc-daemon/smoke_test.mjs",
         "check": "node scripts/check-all.mjs"

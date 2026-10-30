@@ -1,0 +1,192 @@
+/**
+ * Global configuration constants for Gemini Nexus
+ *
+ * WHY THIS FILE EXISTS:
+ * - Chrome Extension Manifest V3 content_scripts cannot use ES modules
+ * - This file must be loaded as a plain script before other _global.js files
+ * - Dependencies: web_model_catalog.js and web_thinking_global.js rely on globalThis.GeminiNexusConfig
+ *
+ * USAGE:
+ * - Content scripts: Access via globalThis.GeminiNexusConfig directly
+ * - Background/Sandbox/Settings/Panel: Import from './constants.js' (ES module wrapper)
+ */
+(function () {
+    const DEFAULT_SHORTCUTS = Object.freeze({
+        quickAsk: 'Alt+Q',
+        openPanel: 'Alt+G',
+        browserControl: 'Alt+Shift+B',
+        ocrCapture: 'Alt+O',
+        snipCapture: 'Alt+S',
+    });
+    const LEGACY_DEFAULT_SHORTCUTS = Object.freeze([
+        Object.freeze({
+            quickAsk: 'Alt+Q',
+            openPanel: 'Alt+G',
+            browserControl: 'Alt+Shift+B',
+            ocrCapture: 'Alt+O',
+        }),
+        Object.freeze({
+            quickAsk: 'Alt+Q',
+            openPanel: 'Alt+G',
+            browserControl: 'Ctrl+B',
+            ocrCapture: 'Alt+O',
+        }),
+        Object.freeze({
+            quickAsk: 'Ctrl+Q',
+            openPanel: 'Alt+G',
+            browserControl: 'Ctrl+B',
+            ocrCapture: 'Alt+O',
+        }),
+        Object.freeze({
+            quickAsk: 'Ctrl+G',
+            openPanel: 'Alt+S',
+            browserControl: 'Ctrl+B',
+            ocrCapture: 'Alt+O',
+        }),
+    ]);
+    const SHORTCUT_KEYS = Object.freeze(Object.keys(DEFAULT_SHORTCUTS));
+
+    function isShortcutObject(shortcuts) {
+        return shortcuts && typeof shortcuts === 'object' && !Array.isArray(shortcuts);
+    }
+
+    function isDefaultShortcutValue(key, value) {
+        return (
+            value === DEFAULT_SHORTCUTS[key] ||
+            LEGACY_DEFAULT_SHORTCUTS.some((shortcuts) => value === shortcuts[key])
+        );
+    }
+
+    function normalizeDefaultShortcutValue(key, value) {
+        return isDefaultShortcutValue(key, value) ? DEFAULT_SHORTCUTS[key] : value;
+    }
+
+    function normalizeShortcutDefaults(shortcuts) {
+        const stored = isShortcutObject(shortcuts) ? shortcuts : {};
+        const usesOnlyDefaultValues = SHORTCUT_KEYS.every((key) => {
+            if (!Object.prototype.hasOwnProperty.call(stored, key)) return true;
+            return isDefaultShortcutValue(key, stored[key]);
+        });
+        const migrated = { ...stored };
+
+        if (usesOnlyDefaultValues) {
+            SHORTCUT_KEYS.forEach((key) => {
+                if (Object.prototype.hasOwnProperty.call(migrated, key)) {
+                    migrated[key] = normalizeDefaultShortcutValue(key, migrated[key]);
+                }
+            });
+        }
+
+        return { ...DEFAULT_SHORTCUTS, ...migrated };
+    }
+
+    const CONTEXT_RECENT_TURNS_LIMITS = Object.freeze({
+        MIN: 1,
+        MAX: 50,
+        DEFAULT: 10,
+    });
+
+    function normalizeContextRecentTurns(value) {
+        const parsed = Number.parseInt(value, 10);
+        if (!Number.isFinite(parsed)) return CONTEXT_RECENT_TURNS_LIMITS.DEFAULT;
+
+        return Math.min(
+            CONTEXT_RECENT_TURNS_LIMITS.MAX,
+            Math.max(CONTEXT_RECENT_TURNS_LIMITS.MIN, parsed)
+        );
+    }
+
+    const DEDICATED_API_PROVIDERS = Object.freeze({
+        openai_official: Object.freeze({
+            id: 'openai_official',
+            storagePrefix: 'OpenaiOfficial',
+            defaultBaseUrl: 'https://api.openai.com/v1',
+            defaultModels: 'gpt-5.6-terra, gpt-5.6-sol, gpt-5.6-luna, gpt-6-astra',
+            defaultModel: 'gpt-5.6-terra',
+            transport: 'openai-responses',
+            supportsWebSearch: true,
+        }),
+        deepseek: Object.freeze({
+            id: 'deepseek',
+            storagePrefix: 'Deepseek',
+            defaultBaseUrl: 'https://api.deepseek.com',
+            defaultModels: 'deepseek-v4-pro, deepseek-v4-flash, deepseek-reasoner, deepseek-chat',
+            defaultModel: 'deepseek-v4-pro',
+            transport: 'openai-chat',
+            reasoningAdapter: 'reasoning_effort',
+            supportsWebSearch: false,
+        }),
+        openrouter: Object.freeze({
+            id: 'openrouter',
+            storagePrefix: 'Openrouter',
+            defaultBaseUrl: 'https://openrouter.ai/api/v1',
+            defaultModels:
+                'openai/gpt-5.6-terra, anthropic/claude-sonnet-5, deepseek/deepseek-v4-flash',
+            defaultModel: 'openai/gpt-5.6-terra',
+            modelListUrl: 'https://openrouter.ai/api/v1/models',
+            transport: 'openai-chat',
+            reasoningAdapter: 'openrouter_reasoning',
+            supportsProviderRouting: true,
+            providerRoutingPlaceholder: '{"order":["openai","anthropic"],"allow_fallbacks":true}',
+            headers: Object.freeze({
+                'X-Title': 'Gemini Nexus',
+            }),
+            supportsWebSearch: false,
+        }),
+        dashscope: Object.freeze({
+            id: 'dashscope',
+            storagePrefix: 'Dashscope',
+            defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            defaultModels: 'qwen3.8-max, qwen3.8-flash-next, qwen3.7-max, qwen3-vl-plus, qwq-plus',
+            defaultModel: 'qwen3.8-max',
+            transport: 'openai-chat',
+            reasoningAdapter: 'dashscope_enable_thinking',
+            supportsWebSearch: false,
+        }),
+        anthropic: Object.freeze({
+            id: 'anthropic',
+            storagePrefix: 'Anthropic',
+            defaultBaseUrl: 'https://api.anthropic.com/v1',
+            defaultModels: 'claude-sonnet-5, claude-opus-5, claude-fable-5-1, claude-haiku-4-5',
+            defaultModel: 'claude-sonnet-5',
+            transport: 'anthropic-messages',
+            supportsWebSearch: false,
+        }),
+        zhipu: Object.freeze({
+            id: 'zhipu',
+            storagePrefix: 'Zhipu',
+            defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+            defaultModels: 'glm-5.3, glm-5.2, glm-5.1, glm-5',
+            defaultModel: 'glm-5.3',
+            transport: 'openai-chat',
+            reasoningAdapter: 'zhipu_thinking',
+            supportsWebSearch: false,
+        }),
+    });
+
+    globalThis.GeminiNexusConfig = Object.freeze({
+        DEFAULT_SHORTCUTS,
+        normalizeShortcutDefaults,
+        normalizeContextRecentTurns,
+        DEFAULT_PROVIDER: 'web',
+        DEFAULT_STORED_GEMINI_MODEL: '56fdd199312815e2',
+        DEFAULT_OFFICIAL_MODEL: 'gemini-3.8-flash',
+        DEFAULT_OFFICIAL_MODELS: 'gemini-3.8-flash, gemini-3.5-flash-lite',
+        DEFAULT_OFFICIAL_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta',
+        DEFAULT_OPENAI_MODEL: 'openai_custom',
+        DEFAULT_THINKING_LEVEL: 'low',
+        DEFAULT_CONTEXT_MODE: 'summary',
+        DEFAULT_CONTEXT_RECENT_TURNS: CONTEXT_RECENT_TURNS_LIMITS.DEFAULT,
+        CONTEXT_RECENT_TURNS_LIMITS,
+        DEFAULT_SIDE_PANEL_SCOPE: 'remembered_tabs',
+        DEFAULT_MCP_TRANSPORT: 'streamable-http',
+        // Ncode ships a zero-dependency local PC & shell MCP daemon. Its
+        // Streamable HTTP endpoint listens on 127.0.0.1:3001 (WebSocket bridge
+        // on 8085 is a separate protocol, see background/managers/ncode_bridge_client.js).
+        DEFAULT_MCP_HTTP_URL: 'http://127.0.0.1:3001/mcp',
+        DEFAULT_MCP_SSE_URL: 'http://127.0.0.1:3001/sse',
+        DEFAULT_MCP_WS_URL: 'ws://127.0.0.1:3001/mcp',
+        DEDICATED_API_PROVIDERS,
+        DEDICATED_API_PROVIDER_IDS: Object.freeze(Object.keys(DEDICATED_API_PROVIDERS)),
+    });
+})();

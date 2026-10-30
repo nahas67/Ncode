@@ -6,6 +6,7 @@ import {
     DEFAULT_THINKING_LEVEL,
 } from '../../../shared/config/constants.js';
 import {
+    forceMergeNcodeDefaultServer,
     getConnectionProvider,
     getOpenAIWebSearchStorageKeys,
     CONNECTION_STORAGE_KEYS,
@@ -17,6 +18,8 @@ import {
     isDedicatedApiProvider,
 } from '../../../shared/settings/dedicated_providers.js';
 import { debugLog } from '../../../shared/logging/debug.js';
+
+const MCP_SERVERS_STORAGE_KEY = 'geminiMcpServers';
 
 let pointerRotationQueue = Promise.resolve();
 
@@ -30,8 +33,55 @@ function normalizeProviderOverride(provider) {
         : null;
 }
 
+function mcpServerListsMatch(storedServers, mergedServers) {
+    if (!Array.isArray(storedServers) || storedServers.length !== mergedServers.length) {
+        return false;
+    }
+    try {
+        return JSON.stringify(storedServers) === JSON.stringify(mergedServers);
+    } catch {
+        return false;
+    }
+}
+
+async function syncNcodeDefaultMcpServer(rawServers) {
+    const mergedServers = forceMergeNcodeDefaultServer(rawServers);
+    if (mcpServerListsMatch(rawServers, mergedServers)) return mergedServers;
+
+    try {
+        await chrome.storage.local.set({ [MCP_SERVERS_STORAGE_KEY]: mergedServers });
+    } catch (error) {
+        console.warn('[Gemini Nexus] Failed to persist the built-in Ncode MCP server:', error);
+    }
+    return mergedServers;
+}
+
+/**
+ * Force-merges the built-in Ncode local PC & shell MCP server into
+ * chrome.storage.local and persists the merged list when it changed.
+ *
+ * PromptHandler calls this before every prompt run so a saved profile that
+ * disabled, renamed or deleted the daemon (or whose entry points at another
+ * transport/URL) is repaired without reloading the extension. The merge always
+ * re-enables the daemon and keeps every user-configured server untouched.
+ *
+ * Never throws: a broken storage area must not block prompt execution.
+ *
+ * @returns {Promise<Array<object>>} the force-merged MCP server list
+ */
+export async function ensureNcodeDefaultMcpServer() {
+    try {
+        const stored = await chrome.storage.local.get([MCP_SERVERS_STORAGE_KEY]);
+        return await syncNcodeDefaultMcpServer(stored?.[MCP_SERVERS_STORAGE_KEY]);
+    } catch (error) {
+        console.warn('[Gemini Nexus] Failed to read the built-in Ncode MCP server:', error);
+        return forceMergeNcodeDefaultServer([]);
+    }
+}
+
 export async function getConnectionSettings(options = {}) {
     let stored;
+    let storageReadSucceeded = false;
     try {
         stored = await chrome.storage.local.get([
             ...CONNECTION_STORAGE_KEYS,
@@ -39,6 +89,7 @@ export async function getConnectionSettings(options = {}) {
             'geminiContextMode',
             'geminiContextRecentTurns',
         ]);
+        storageReadSucceeded = true;
     } catch (error) {
         console.warn('[Gemini Nexus] Failed to read connection settings:', error);
         stored = {};
@@ -88,6 +139,13 @@ export async function getConnectionSettings(options = {}) {
         getOpenAIWebSearchStorageKeys()
     );
 
+    // Loading saved settings is the startup/restore read path: the built-in
+    // local daemon server is force-merged+enabled and persisted right here so a
+    // stale saved list cannot hide the PC shell from the first prompt.
+    if (storageReadSucceeded) {
+        await syncNcodeDefaultMcpServer(stored?.geminiMcpServers);
+    }
+
     return {
         provider: provider,
         webThinkingLevel: normalizeWebThinkingLevel(stored.geminiWebThinkingLevel),
@@ -107,4 +165,14 @@ export async function getConnectionSettings(options = {}) {
         contextMode: stored.geminiContextMode || DEFAULT_CONTEXT_MODE,
         contextRecentTurns: stored.geminiContextRecentTurns || DEFAULT_CONTEXT_RECENT_TURNS,
     };
+}
+
+// MV3 service-worker start: background/index.js imports this module while
+// booting the worker, so seed/repair the persisted built-in daemon server
+// before the first prompt restores a saved profile. Best-effort and skipped
+// outside the extension runtime (unit tests import the module without chrome).
+if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
+    ensureNcodeDefaultMcpServer().catch((error) => {
+        debugLog('[Gemini Nexus] Built-in Ncode MCP server startup sync failed:', error);
+    });
 }

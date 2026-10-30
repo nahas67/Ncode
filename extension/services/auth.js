@@ -1,9 +1,32 @@
-import { extractFromHTML } from '../shared/utils/index.js';
+import {
+    extractGeminiWebTokensFromHtml,
+    requireCompleteGeminiWebTokens,
+} from './providers/shared/web_auth.js';
 
 // Get 'at' (SNlM0e), 'bl' (cfb2h), and user index values
 // Supports fetching from specific user index URL to get correct tokens for that account.
 const inflightFetch = new Map();
 
+/**
+ * Fetches the logged-in Gemini app HTML and parses the Web session tokens.
+ *
+ * The actual HTML → token parsing lives in
+ * `services/providers/shared/web_auth.js` so the live-DOM fallback and the
+ * direct background fetch share one implementation. This wrapper keeps the
+ * historical API (`userIndex` positional argument + in-flight de-duplication).
+ *
+ * @param {string} [userIndex='0'] Gemini account index to authenticate as.
+ * @param {{ signal?: AbortSignal|null }} [options]
+ * @returns {Promise<{
+ *   atValue: string,
+ *   blValue: string,
+ *   fSid: string,
+ *   locale: string,
+ *   authUserIndex: string,
+ *   uploadPushId: string|null,
+ *   uploadClientPctx: string|null,
+ * }>}
+ */
 export async function fetchRequestParams(userIndex = '0', { signal } = {}) {
     const key = String(userIndex || '0');
     if (inflightFetch.has(key)) return inflightFetch.get(key);
@@ -32,45 +55,8 @@ export async function fetchRequestParams(userIndex = '0', { signal } = {}) {
             throw new Error(`Failed to fetch Gemini Web params (HTTP ${response.status})`);
         const html = await response.text();
 
-        const atValue = extractFromHTML('SNlM0e', html);
-        const blValue = extractFromHTML('cfb2h', html);
-        const fSid = extractFromHTML('FdrFJe', html);
-        const uploadPushId = extractFromHTML('qKIAYe', html);
-        const uploadClientPctx = extractFromHTML('Ylro7b', html);
-        const locale = html.match(/<html[^>]*\slang="([^"]+)"/)?.[1] || 'en-US';
-
-        let authUserIndex = userIndex;
-
-        const authMatch = html.match(/data-index=["'](\d+)["']/);
-        if (authMatch) {
-            const parsed = authMatch[1];
-            if (/^\d+$/.test(parsed) && Number(parsed) < 20) authUserIndex = parsed;
-        }
-
-        const missingRequestTokens = [
-            ['atValue', atValue],
-            ['blValue', blValue],
-            ['fSid', fSid],
-        ]
-            .filter(([, value]) => !value)
-            .map(([name]) => name);
-
-        if (missingRequestTokens.length > 0) {
-            throw new Error(
-                `Gemini Web request tokens unavailable for account ${userIndex}: ${missingRequestTokens.join(', ')}. Please log in to gemini.google.com or refresh Gemini.`
-            );
-        }
-
-        const result = {
-            atValue,
-            blValue,
-            fSid,
-            locale,
-            authUserIndex,
-            uploadPushId: uploadPushId || null,
-            uploadClientPctx: uploadClientPctx || null,
-        };
-        return result;
+        const tokens = extractGeminiWebTokensFromHtml(html, { userIndex });
+        return requireCompleteGeminiWebTokens(tokens, { userIndex });
     })();
     inflightFetch.set(key, task);
     try {

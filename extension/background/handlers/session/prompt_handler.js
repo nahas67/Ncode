@@ -23,6 +23,8 @@ import {
 } from './prompt/tool_loop.js';
 import { toControlTabSummary } from '../../control/tabs.js';
 import { classifyProviderError } from '../../managers/session/error_classifier.js';
+import { ensureNcodeDefaultMcpServer } from '../../managers/session/settings_store.js';
+import { forceMergeNcodeDefaultServer } from '../../../shared/settings/connection.js';
 
 // One free retry when the model narrates a browser step without tool JSON.
 const MAX_NARRATION_NUDGES = 1;
@@ -80,6 +82,7 @@ export class PromptHandler {
      *   compactManager?: object|null,
      *   harnessStatus?: object|null,
      *   bridgeClient?: object|null,
+     *   approvalManager?: object|null,
      * }} [deps]
      */
     constructor(
@@ -91,6 +94,7 @@ export class PromptHandler {
             compactManager = null,
             harnessStatus = null,
             bridgeClient = null,
+            approvalManager = null,
         } = {}
     ) {
         this.sessionManager = sessionManager;
@@ -99,11 +103,14 @@ export class PromptHandler {
         this.compactManager = compactManager;
         this.harnessStatus = harnessStatus;
         this.bridgeClient = bridgeClient;
+        this.approvalManager = approvalManager;
         this.builder = new PromptBuilder(controlManager, mcpManager, {
             goalManager,
             compactManager,
         });
-        this.toolExecutor = new ToolExecutor(controlManager, mcpManager);
+        this.toolExecutor = new ToolExecutor(controlManager, mcpManager, {
+            approvalManager,
+        });
         this.activeRun = null;
     }
 
@@ -322,6 +329,34 @@ export class PromptHandler {
             };
 
             try {
+                // The Ncode local PC & shell MCP daemon is not optional: repair
+                // chrome.storage.local and force-merge/enable the canonical
+                // server into THIS request before every prompt execution, even
+                // when a stale sidepanel snapshot or an old saved settings blob
+                // omitted or disabled it. Runs before the goal loop so tool
+                // discovery sees the daemon on the very first turn.
+                try {
+                    await ensureNcodeDefaultMcpServer();
+                    const mergedServers = forceMergeNcodeDefaultServer(
+                        Array.isArray(request.mcpServers) ? request.mcpServers : []
+                    );
+                    request = {
+                        ...request,
+                        mcpServers: mergedServers,
+                        mcpServerId: request.mcpServerId || mergedServers[0]?.id || null,
+                        enableMcpTools:
+                            request.enableMcpTools === true ||
+                            mergedServers.some((server) => server.enabled !== false),
+                    };
+                    run.request = request;
+                } catch (error) {
+                    // Settings repair is best-effort: never block a prompt on it.
+                    console.warn(
+                        '[Ncode] Failed to force-merge the local MCP server:',
+                        error?.message || error
+                    );
+                }
+
                 if (request.sessionSnapshot) {
                     const provider = await getStoredProvider();
                     if (provider === 'web') {

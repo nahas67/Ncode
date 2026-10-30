@@ -1,5 +1,8 @@
 import { TemplateIcons } from './icons.js';
 
+// Chat stream template. The Ncode harness bar is rendered directly above this
+// block by `NcodeHarnessTemplate` in `renderLayout()` (layout.js), so the chat
+// area never needs its own harness markup.
 export const ChatTemplate = `
     <!-- CHAT AREA -->
     <div id="chat-history"></div>

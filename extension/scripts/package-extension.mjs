@@ -35,6 +35,7 @@ const requiredPaths = [
     'assets/icons',
     'assets/cursors',
     'content/cursor',
+    'css',
     'background',
     'shared',
     'services',
@@ -68,7 +69,8 @@ export function createPackagedManifest(manifest) {
         if (
             entry.world === 'MAIN' ||
             entry.all_frames === true ||
-            entry.js?.includes('content/gemini_watermark_bridge.js')
+            entry.js?.includes('content/gemini_watermark_bridge.js') ||
+            entry.js?.includes('content/gemini_dom_bridge.js')
         ) {
             contentScripts.push(entry);
             continue;
@@ -118,7 +120,8 @@ export function getUnbundledContentScriptFiles(manifest) {
                     (entry) =>
                         entry.world === 'MAIN' ||
                         entry.all_frames === true ||
-                        entry.js?.includes('content/gemini_watermark_bridge.js')
+                        entry.js?.includes('content/gemini_watermark_bridge.js') ||
+                        entry.js?.includes('content/gemini_dom_bridge.js')
                 )
                 .flatMap((entry) => entry.js ?? [])
                 .filter(
@@ -354,6 +357,7 @@ async function main() {
         writeContentBundle(YOUTUBE_SCRIPT_ORDER, 'content/youtube_summary_bundle.js'),
         copyUnbundledContentScripts(),
         copyIntoPackage('content/cursor'),
+        copyIntoPackage('css'),
         copyIntoPackage('shared'),
         copyIntoPackage('services'),
         copyIntoPackage('vendor/gemini-watermark-remover'),

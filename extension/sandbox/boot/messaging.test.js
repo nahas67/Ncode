@@ -238,3 +238,111 @@ describe('AppMessageBridge settings restore', () => {
         expect(app.handleIncomingMessage).not.toHaveBeenCalled();
     });
 });
+
+describe('AppMessageBridge Ncode harness routing', () => {
+    function createBridge() {
+        const bridge = new AppMessageBridge();
+        const ui = {
+            updateNcodeHarnessStatus: vi.fn(),
+            updateNcodeGoalSession: vi.fn(),
+            updateNcodePreamble: vi.fn(),
+            updateNcodeCompactionState: vi.fn(),
+            updateNcodeApprovalRequest: vi.fn(),
+            settings: {},
+        };
+        const app = { handleIncomingMessage: vi.fn() };
+        bridge.setUI(ui);
+        bridge.setApp(app);
+        return { bridge, ui, app };
+    }
+
+    it('routes nested BACKGROUND_MESSAGE status updates to the harness bar', () => {
+        const { bridge, ui, app } = createBridge();
+
+        bridge.dispatch(
+            'BACKGROUND_MESSAGE',
+            {
+                action: 'NCODE_HARNESS_STATUS_UPDATE',
+                geminiWebConnected: true,
+                pcShellConnected: false,
+                bridgeConnected: true,
+            },
+            {}
+        );
+
+        expect(ui.updateNcodeHarnessStatus).toHaveBeenCalledTimes(1);
+        expect(ui.updateNcodeHarnessStatus.mock.calls[0][0]).toMatchObject({
+            action: 'NCODE_HARNESS_STATUS_UPDATE',
+            bridgeConnected: true,
+        });
+        expect(app.handleIncomingMessage).not.toHaveBeenCalled();
+    });
+
+    it('canonicalises legacy short Ncode names before routing', () => {
+        const { bridge, ui } = createBridge();
+
+        bridge.dispatch(
+            'BACKGROUND_MESSAGE',
+            { action: 'NCODE_HARNESS_STATUS', pcShellConnected: true },
+            {}
+        );
+        bridge.dispatch(
+            'BACKGROUND_MESSAGE',
+            { action: 'NCODE_PREAMBLE', text: 'Editing', ts: 2 },
+            {}
+        );
+
+        expect(ui.updateNcodeHarnessStatus).toHaveBeenCalledTimes(1);
+        expect(ui.updateNcodePreamble).toHaveBeenCalledWith(
+            expect.objectContaining({ text: 'Editing' })
+        );
+    });
+
+    it('routes goal state, compaction and approval messages', () => {
+        const { bridge, ui } = createBridge();
+
+        bridge.dispatch(
+            'BACKGROUND_MESSAGE',
+            {
+                action: 'NCODE_GOAL_STATE_UPDATE',
+                sessionId: 'session-1',
+                goalSession: { workflowId: 'wf-1', rootGoal: 'Ship it', subgoals: [] },
+            },
+            {}
+        );
+        bridge.dispatch(
+            'BACKGROUND_MESSAGE',
+            { action: 'NCODE_COMPACTION_STATE', state: 'resuming' },
+            {}
+        );
+        bridge.dispatch(
+            'BACKGROUND_MESSAGE',
+            {
+                action: 'NCODE_APPROVAL_REQUEST',
+                requestId: 'approval-1',
+                toolName: 'pc_exec_shell',
+            },
+            {}
+        );
+
+        expect(ui.updateNcodeGoalSession).toHaveBeenCalledWith(
+            expect.objectContaining({ workflowId: 'wf-1' }),
+            'session-1'
+        );
+        expect(ui.updateNcodeCompactionState).toHaveBeenCalledWith(
+            expect.objectContaining({ state: 'resuming' })
+        );
+        expect(ui.updateNcodeApprovalRequest).toHaveBeenCalledWith(
+            expect.objectContaining({ requestId: 'approval-1' })
+        );
+    });
+
+    it('still forwards unrelated BACKGROUND_MESSAGE payloads to the app controller', () => {
+        const { bridge, ui, app } = createBridge();
+
+        bridge.dispatch('BACKGROUND_MESSAGE', { action: 'SERVICE_WORKER_STARTED', ts: 1 }, {});
+
+        expect(app.handleIncomingMessage).toHaveBeenCalledTimes(1);
+        expect(ui.updateNcodeHarnessStatus).not.toHaveBeenCalled();
+    });
+});

@@ -104,11 +104,36 @@ describe('manifest content scripts', () => {
         expect(manifest.permissions).toContain('downloads');
     });
 
-    it('does not repeat host permissions already covered by all urls', async () => {
+    it('declares the Ncode local endpoints and Gemini Web host permissions', async () => {
         const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
 
+        // <all_urls> stays because browser control injects into arbitrary tabs.
         expect(manifest.host_permissions).toContain('<all_urls>');
-        expect(manifest.host_permissions).not.toContain('https://gemini.google.com/*');
+        // Ncode's local harness endpoints and the zero-API Gemini Web origin are
+        // declared explicitly so the daemon/WebSocket bridge and the live DOM
+        // fallback are understandable from the manifest alone.
+        for (const hostPermission of [
+            'http://127.0.0.1/*',
+            'http://localhost/*',
+            'ws://127.0.0.1/*',
+            'https://gemini.google.com/*',
+        ]) {
+            expect(manifest.host_permissions).toContain(hostPermission);
+        }
+    });
+
+    it('registers the Gemini live-DOM bridge only on gemini.google.com', async () => {
+        const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
+        const domBridgeEntry = manifest.content_scripts.find((entry) =>
+            entry.js?.includes('content/gemini_dom_bridge.js')
+        );
+
+        expect(domBridgeEntry).toMatchObject({
+            matches: ['https://gemini.google.com/*'],
+            js: ['content/gemini_dom_bridge.js'],
+            run_at: 'document_idle',
+        });
+        expect(domBridgeEntry.world).toBeUndefined();
     });
 
     it('does not inject content scripts into local MHTML archives', async () => {

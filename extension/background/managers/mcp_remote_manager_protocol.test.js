@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpRemoteManager } from './mcp_remote_manager.js';
+import { NCODE_DEFAULT_MCP_SERVER } from '../../shared/settings/connection.js';
+import { MCP_RECONNECT_FAILURE_TTL_MS, createReconnectPolicy } from './mcp/reconnect_policy.js';
 
 function jsonResponse(body, headers = {}) {
     return new Response(JSON.stringify(body), {
@@ -616,5 +618,151 @@ describe('McpRemoteManager protocol integration', () => {
         expect(fetch).toHaveBeenCalledWith('http://localhost/messages', expect.any(Object));
 
         await manager.disconnect('local');
+    });
+});
+
+describe('McpRemoteManager local daemon reconnect', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const daemonId = NCODE_DEFAULT_MCP_SERVER.id;
+    const daemonUrl = NCODE_DEFAULT_MCP_SERVER.url;
+    const daemonTools = [
+        { name: 'pc_exec_shell', description: 'Run a shell command' },
+        { name: 'pc_system_info', description: 'Host information' },
+    ];
+
+    function createDaemonFetch(daemon, requests) {
+        return vi.fn(async (url, init = {}) => {
+            const body = JSON.parse(init.body || '{}');
+            requests.push(body);
+
+            if (daemon.online !== true) {
+                throw new Error(`MCP Streamable HTTP error (400): daemon offline (${body.method})`);
+            }
+            if (body.method === 'initialize') {
+                return jsonResponse(
+                    {
+                        jsonrpc: '2.0',
+                        id: body.id,
+                        result: { protocolVersion: '2025-11-25' },
+                    },
+                    { 'MCP-Session-Id': 'local-session' }
+                );
+            }
+            if (body.method === 'tools/list') {
+                return jsonResponse({
+                    jsonrpc: '2.0',
+                    id: body.id,
+                    result: { tools: daemonTools },
+                });
+            }
+            return jsonResponse({ jsonrpc: '2.0', id: body.id, result: {} });
+        });
+    }
+
+    function createManagerWithClock() {
+        let currentTime = 1_000_000;
+        const policy = createReconnectPolicy({ now: () => currentTime });
+        const manager = new McpRemoteManager({ clientVersion: 'test', reconnectPolicy: policy });
+        return {
+            manager,
+            policy,
+            advance(ms) {
+                currentTime += ms;
+            },
+        };
+    }
+
+    it('reconnects on the next listing after the local daemon starts later', async () => {
+        const daemon = { online: false };
+        const requests = [];
+        vi.stubGlobal('fetch', createDaemonFetch(daemon, requests));
+        const { manager, policy, advance } = createManagerWithClock();
+
+        await expect(
+            manager.listToolsForServer(daemonId, 'streamable-http', daemonUrl)
+        ).rejects.toThrow('daemon offline');
+        const failedAttemptRequests = requests.length;
+        expect(failedAttemptRequests).toBeGreaterThan(0);
+        expect(policy.isCoolingDown(daemonId)).toBe(true);
+
+        // Inside the invalidation TTL the cached failure fails fast (no re-dial).
+        await expect(
+            manager.listToolsForServer(daemonId, 'streamable-http', daemonUrl)
+        ).rejects.toThrow('daemon offline');
+        expect(requests).toHaveLength(failedAttemptRequests);
+
+        daemon.online = true;
+        advance(MCP_RECONNECT_FAILURE_TTL_MS);
+
+        const tools = await manager.listToolsForServer(daemonId, 'streamable-http', daemonUrl);
+
+        expect(tools.map((tool) => tool.name)).toEqual(['pc_exec_shell', 'pc_system_info']);
+        expect(requests.some((request) => request.method === 'initialize')).toBe(true);
+        expect(policy.getFailure(daemonId)).toBeNull();
+    });
+
+    it('dials immediately with forceNewConnection after the daemon starts', async () => {
+        const daemon = { online: false };
+        const requests = [];
+        vi.stubGlobal('fetch', createDaemonFetch(daemon, requests));
+        const { manager, policy } = createManagerWithClock();
+
+        await expect(
+            manager.listToolsForServer(daemonId, 'streamable-http', daemonUrl)
+        ).rejects.toThrow('daemon offline');
+        expect(policy.isCoolingDown(daemonId)).toBe(true);
+
+        daemon.online = true;
+        const tools = await manager.listToolsForServer(
+            daemonId,
+            'streamable-http',
+            daemonUrl,
+            {},
+            { forceNewConnection: true }
+        );
+
+        expect(tools.map((tool) => tool.name)).toEqual(['pc_exec_shell', 'pc_system_info']);
+        expect(policy.getFailure(daemonId)).toBeNull();
+    });
+
+    it('reconnect(serverId) clears cached failure state so the next listing succeeds', async () => {
+        const daemon = { online: false };
+        const requests = [];
+        vi.stubGlobal('fetch', createDaemonFetch(daemon, requests));
+        const { manager, policy } = createManagerWithClock();
+
+        await expect(
+            manager.listToolsForServer(daemonId, 'streamable-http', daemonUrl)
+        ).rejects.toThrow('daemon offline');
+        expect(policy.isCoolingDown(daemonId)).toBe(true);
+
+        daemon.online = true;
+        await expect(manager.reconnect(daemonId)).resolves.toBe(true);
+        expect(policy.getFailure(daemonId)).toBeNull();
+
+        const tools = await manager.listToolsForServer(daemonId, 'streamable-http', daemonUrl);
+        expect(tools.map((tool) => tool.name)).toEqual(['pc_exec_shell', 'pc_system_info']);
+    });
+
+    it('reuses one healthy connection for repeated listings', async () => {
+        const daemon = { online: true };
+        const requests = [];
+        vi.stubGlobal('fetch', createDaemonFetch(daemon, requests));
+        const { manager } = createManagerWithClock();
+
+        await manager.listToolsForServer(daemonId, 'streamable-http', daemonUrl);
+        const initializeCountAfterFirstList = requests.filter(
+            (request) => request.method === 'initialize'
+        ).length;
+
+        await manager.listToolsForServer(daemonId, 'streamable-http', daemonUrl);
+
+        expect(requests.filter((request) => request.method === 'initialize')).toHaveLength(
+            initializeCountAfterFirstList
+        );
+        expect(initializeCountAfterFirstList).toBe(1);
     });
 });

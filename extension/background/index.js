@@ -9,6 +9,7 @@ import { SidePanelScopeManager } from './managers/sidepanel_scope_manager.js';
 import { NcodeGoalManager } from './managers/ncode_goal_manager.js';
 import { NcodeCompactManager } from './managers/ncode_compact_manager.js';
 import { NcodeHarnessStatus } from './managers/ncode_harness_status.js';
+import { NcodeApprovalManager } from './managers/ncode_approval_manager.js';
 import { NcodeBridgeClient } from './managers/ncode_bridge_client.js';
 import { DEFAULT_STORED_GEMINI_MODEL } from '../shared/config/constants.js';
 import { setupContextMenus } from './menus.js';
@@ -197,11 +198,15 @@ const goalManager = new NcodeGoalManager();
 const compactManager = new NcodeCompactManager({ sessionManager, mcpManager, goalManager });
 const bridgeClient = new NcodeBridgeClient({ askWeb: askGeminiWebViaBridge });
 const harnessStatus = new NcodeHarnessStatus({ mcpManager, bridgeClient, goalManager });
+const approvalManager = new NcodeApprovalManager();
 
 // Restore persisted goals, start the status probe loop and connect the local
 // PC bridge. All three are no-op-safe and never throw out of the worker.
 goalManager.restore().catch((error) => {
     console.warn('[Ncode] Failed to restore goal sessions:', error?.message || error);
+});
+approvalManager.ensureInitialized().catch((error) => {
+    console.warn('[Ncode] Failed to init approval policy:', error?.message || error);
 });
 harnessStatus.start();
 bridgeClient.connect();
@@ -270,7 +275,7 @@ setupMessageListener(
     mcpManager,
     logManager,
     sidePanelScopeManager,
-    { goalManager, compactManager, harnessStatus, bridgeClient }
+    { goalManager, compactManager, harnessStatus, bridgeClient, approvalManager }
 );
 
 // Keep-alive 401/403 must invalidate AuthManager memory as well as storage;

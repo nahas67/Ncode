@@ -48,6 +48,17 @@ export function initAppMode() {
                 modelSelect: document.getElementById('model-select'),
             });
 
+            // The harness bar lives in the layout template (NcodeHarnessTemplate)
+            // and is mounted/started by UIController -> NcodeHarnessBar.init(),
+            // which also starts the 3s status poll. A missing bar means the layout
+            // template regressed, so fail loudly instead of silently losing the
+            // connection lights.
+            if (!document.getElementById('ncode-harness-bar')) {
+                console.error(
+                    '[Ncode] Harness bar was not mounted into the sandbox layout (missing #ncode-harness-bar).'
+                );
+            }
+
             const imageManager = new ImageManager(
                 {
                     imageInput: document.getElementById('image-input'),

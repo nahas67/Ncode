@@ -3,14 +3,19 @@
  * Ncode acceptance gate.
  *
  * Runs the complete static + runtime verification that does not require a live
- * Chrome profile:
+ * Chrome profile, in deterministic order:
  *   1. syntax-check every authored JavaScript/ESM file in the Ncode tree
  *   2. verify the extension mirror of the orchestrator is byte-identical
  *   3. reject lazy placeholders/TODO stubs in Ncode-authored sources
- *   4. run the orchestrator contract smoke test
- *   5. run the PC daemon smoke test (real spawned daemons)
- *   6. verify the packaged/loadable extension in extension/dist
- *   7. verify the unified root scripts exist
+ *   4. build the loadable extension (`npm run build:extension`: vite + package + finalize)
+ *   5. verify the packaged/loadable extension in extension/dist
+ *   6. run the orchestrator contract smoke test
+ *   7. run the PC daemon smoke test (real spawned daemons)
+ *   8. run the end-to-end runtime test (daemon MCP + 3-layer messaging + Compact & Resume)
+ *   9. verify the unified root scripts exist
+ *
+ * The gate is fail-fast: once a pipeline step fails, the dependent later steps are
+ * skipped so the report points at the first broken contract.
  *
  * Usage (from ./Ncode):  npm run check
  */
@@ -25,6 +30,7 @@ const rootDir = path.resolve(__dirname, '..');
 
 let checks = 0;
 let failures = 0;
+let pipelineBlocked = false;
 
 function report(name, ok, detail = '') {
     checks += 1;
@@ -76,6 +82,7 @@ function nodeCheck(file) {
     return { ok: false, detail: (result.stderr || result.stdout || '').split('\n')[0].slice(0, 220) };
 }
 
+/** Run a node script and return a compact pass/fail result. */
 function runNodeScript(relativePath, timeoutMs = 300000) {
     const absolute = path.join(rootDir, relativePath);
     const result = spawnSync(process.execPath, [absolute], {
@@ -88,6 +95,43 @@ function runNodeScript(relativePath, timeoutMs = 300000) {
         status: result.status,
         tail: `${result.stdout || ''}${result.stderr || ''}`.trim().split('\n').slice(-3).join(' | '),
     };
+}
+
+/**
+ * Run an npm script from the repository root.
+ *
+ * npm is a `.cmd` shim on Windows, and Node refuses to spawn `.cmd` files without
+ * a shell. The command is therefore passed as ONE string (`shell: true`, no argv
+ * array) which is both DEP0190-clean and portable.
+ */
+function runNpmScript(scriptName, timeoutMs = 600000) {
+    const result = spawnSync(`npm run ${scriptName}`, {
+        cwd: rootDir,
+        encoding: 'utf8',
+        timeout: timeoutMs,
+        shell: true,
+    });
+    return {
+        ok: result.status === 0,
+        status: result.status,
+        tail: `${result.stdout || ''}${result.stderr || ''}`.trim().split('\n').slice(-3).join(' | '),
+    };
+}
+
+/**
+ * Runs one acceptance gate step. Once any gate has failed, later dependent steps
+ * are reported as skipped instead of running against a known-broken build.
+ */
+function gate(name, runner, failureDetail = '') {
+    if (pipelineBlocked) {
+        console.log(`SKIP ${name} (fail-fast: an earlier gate failed)`);
+        return false;
+    }
+    const result = runner();
+    const ok = result.ok;
+    report(name, ok, ok ? '' : result.tail || failureDetail);
+    if (!ok) pipelineBlocked = true;
+    return ok;
 }
 
 function sha256(buffer) {
@@ -125,7 +169,17 @@ const AUTHORED_FILE_PATTERNS = [
     /^extension\/manifest\.json$/,
 ];
 
-const REQUIRED_ROOT_SCRIPTS = ['install:all', 'build:extension', 'start:daemon', 'dev'];
+const REQUIRED_ROOT_SCRIPTS = [
+    'install:all',
+    'build:extension',
+    'start:daemon',
+    'dev',
+    'verify:dist',
+    'test:e2e',
+    'test:orchestrator',
+    'test:pc-daemon',
+    'check',
+];
 
 async function main() {
     // 1. Syntax check every authored JS/ESM file.
@@ -145,6 +199,7 @@ async function main() {
     const mirrorPairs = [
         ['orchestrator/goal_state_machine.js', 'extension/shared/orchestrator/goal_state_machine.js'],
         ['orchestrator/compact_resume_engine.js', 'extension/shared/orchestrator/compact_resume_engine.js'],
+        ['orchestrator/subagent_router.js', 'extension/shared/orchestrator/subagent_router.js'],
     ];
     const mirrorFailures = [];
     for (const [source, mirror] of mirrorPairs) {
@@ -175,19 +230,28 @@ async function main() {
     }
     report('no lazy placeholders in authored sources', placeholderHits.length === 0, placeholderHits.slice(0, 5).join('; '));
 
-    // 4. Orchestrator contract smoke test.
-    const orchestratorSmoke = runNodeScript('orchestrator/smoke_test.mjs');
-    report('orchestrator smoke test', orchestratorSmoke.ok, orchestratorSmoke.ok ? '' : orchestratorSmoke.tail);
+    // Any static-contract failure stops the pipeline before it mutates dist/.
+    if (failures > 0) {
+        pipelineBlocked = true;
+        console.log('SKIP runtime pipeline (fail-fast: static checks failed)');
+    }
 
-    // 5. PC daemon smoke test.
-    const daemonSmoke = runNodeScript('pc-daemon/smoke_test.mjs', 420000);
-    report('pc-daemon smoke test', daemonSmoke.ok, daemonSmoke.ok ? '' : daemonSmoke.tail);
+    // 4. Build the loadable extension (vite build -> package -> finalize dist).
+    gate('extension build', () => runNpmScript('build:extension', 900000));
 
-    // 6. Packaged extension verification.
-    const extensionVerify = runNodeScript('scripts/verify-extension-dist.mjs', 180000);
-    report('packaged extension verified', extensionVerify.ok, extensionVerify.ok ? '' : extensionVerify.tail);
+    // 5. Verify the packaged/loadable extension.
+    gate('packaged extension verified', () => runNodeScript('scripts/verify-extension-dist.mjs', 180000));
 
-    // 7. Unified scripts exist.
+    // 6. Orchestrator contract smoke test.
+    gate('orchestrator smoke test', () => runNodeScript('orchestrator/smoke_test.mjs'));
+
+    // 7. PC daemon smoke test.
+    gate('pc-daemon smoke test', () => runNodeScript('pc-daemon/smoke_test.mjs', 420000));
+
+    // 8. End-to-end runtime test.
+    gate('end-to-end runtime test', () => runNodeScript('test/runtime/e2e.mjs', 180000));
+
+    // 9. Unified scripts exist.
     const rootPackage = JSON.parse(await readFile(path.join(rootDir, 'package.json'), 'utf8'));
     const missingScripts = REQUIRED_ROOT_SCRIPTS.filter((script) => !rootPackage.scripts?.[script]);
     report('root package unified scripts', missingScripts.length === 0, missingScripts.join(', '));

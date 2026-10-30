@@ -25,6 +25,7 @@ import {
     saveSidePanelSessionBinding,
 } from './bridge_storage.js';
 import { getRuntimeLastError } from '../../shared/logging/runtime_error.js';
+import { canonicalNcodeAction } from '../../shared/messaging/ncode_actions.js';
 
 function getModelSaveKey(payload) {
     if (payload && typeof payload === 'object') {
@@ -285,9 +286,15 @@ export class MessageBridge {
             return;
         }
 
+        // Ncode broadcasts always reach the sandbox with their canonical action
+        // name, even when an older manager emitted a legacy alias.
+        const canonicalAction = canonicalNcodeAction(message?.action);
         this.frame.postMessage({
             action: 'BACKGROUND_MESSAGE',
-            payload: message,
+            payload:
+                canonicalAction !== message?.action
+                    ? { ...message, action: canonicalAction }
+                    : message,
         });
     }
 }
